@@ -36,6 +36,8 @@ else
   echo "▶ docker 설치 (공식 저장소)"
   dnf -y install dnf-plugins-core
   dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+  # Rocky 는 $releasever 가 "8.8" 처럼 마이너 버전까지 풀려 404 가 난다 — 메이저 버전으로 고정
+  sed -i "s/\$releasever/$(rpm -E %rhel)/g" /etc/yum.repos.d/docker-ce.repo
   dnf -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
 systemctl enable --now docker
