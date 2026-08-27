@@ -1,0 +1,42 @@
+# CI/CD 인프라: Jenkins(CD) + gitlab-runner(CI)
+# 앱 스택과 수명 주기를 분리한다 — 앱 재배포가 Jenkins 를 건드리지 않도록.
+# 실행: cd infra && docker compose -f docker-compose.infra.yml up -d --build
+name: finch-infra
+
+services:
+  jenkins:
+    build:
+      context: ..
+      dockerfile: infra/docker/jenkins.Dockerfile
+    image: finch/jenkins:latest
+    container_name: finch-jenkins
+    # docker.sock 접근을 위해 root 로 실행한다.
+    # 보안상 이상적이진 않지만 단일 VM 교육 프로젝트에서는 실용적 선택 (결정서 참고).
+    user: root
+    ports:
+      - "8080:8080"
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  gitlab-runner:
+    image: gitlab/gitlab-runner:latest
+    container_name: finch-gitlab-runner
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+    volumes:
+      - gitlab_runner_config:/etc/gitlab-runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    # 최초 1회 등록 (토큰: GitLab 프로젝트 Settings → CI/CD → Runners):
+    #   docker exec -it finch-gitlab-runner gitlab-runner register \
+    #     --url https://github.com \
+    #     --executor docker --docker-image alpine:latest \
+    #     --docker-volumes /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  jenkins_home:
+  gitlab_runner_config:
