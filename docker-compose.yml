@@ -25,13 +25,16 @@ services:
       dockerfile: infra/docker/backend.Dockerfile
     image: finch/backend:latest
     container_name: finch-backend
+    # backend/src/main/resources/application.yaml 이 정의한 환경변수 계약을 따른다
     environment:
       TZ: ${TZ:-Asia/Seoul}
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-backend:5432/${BACKEND_DB_NAME}
-      SPRING_DATASOURCE_USERNAME: ${BACKEND_DB_USER}
-      SPRING_DATASOURCE_PASSWORD: ${BACKEND_DB_PASSWORD}
-      SPRING_DATA_REDIS_HOST: redis
-      SPRING_DATA_REDIS_PORT: "6379"
+      POSTGRES_HOST: postgres-backend
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${BACKEND_DB_NAME}
+      POSTGRES_USER: ${BACKEND_DB_USER}
+      POSTGRES_PASSWORD: ${BACKEND_DB_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
     depends_on:
       postgres-backend:
         condition: service_healthy
