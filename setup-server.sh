@@ -55,9 +55,9 @@ systemctl enable --now crond
 # ── 로컬 방화벽(firewalld) ────────────────────────────────
 # NCP ACG(콘솔에서 설정)와 별개로 VM 내부 방화벽도 통과해야 한다.
 if systemctl is-active --quiet firewalld; then
-  echo "▶ firewalld: 80(Nginx)·3000(Jenkins) 개방"
+  echo "▶ firewalld: 80(Nginx)·443(Jenkins) 개방"
   firewall-cmd --permanent --add-port=80/tcp
-  firewall-cmd --permanent --add-port=3000/tcp
+  firewall-cmd --permanent --add-port=443/tcp
   firewall-cmd --reload
 else
   echo "▶ firewalld 비활성 — 건너뜀 (ACG만 적용됨)"
@@ -72,7 +72,7 @@ chmod 644 /etc/cron.d/finch-db-backup
 
 echo
 echo "✓ 서버 세팅 완료. 다음 단계:"
-echo "  1. 방화벽(ACG/보안그룹)에서 22, 80, 3000(Jenkins) 만 개방 (5432·6379 등 DB 포트 금지)"
+echo "  1. 방화벽(ACG/보안그룹)에서 22, 80, 443(Jenkins) 만 개방 (5432·6379 등 DB 포트 금지)"
 echo "  2. git clone → ${APP_DIR}"
 echo "  3. infra/.env.example → infra/.env 작성 (DB 비밀번호 등)"
 echo "     ai/.env.example    → infra/ai.env 작성 (AI 외부 API 키)"
