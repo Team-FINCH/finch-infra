@@ -18,8 +18,9 @@
 ## 서버 첫 구축 순서
 
 ```bash
-# 0. 방화벽(ACG/보안그룹): 22, 80, 443(Jenkins) 만 개방. DB 포트(5432·6379)는 절대 열지 않는다.
-#    (NCP ACG 는 실측 결과 22·80·443 만 통과 — HTTPS 를 쓰기 전까지 443 을 Jenkins 로 사용)
+# 0. 방화벽(ACG/보안그룹): 22, 80, 443 만 개방 (Jenkins 는 80의 /jenkins 경로 경유). DB 포트(5432·6379)는 절대 열지 않는다.
+#    (NCP ACG 는 실측 결과 22·80·443 만 통과. github.com 이 443 대상 webhook 에
+#     https 를 강제해 Jenkins 는 nginx 80 경유 http://<공인IP>/jenkins/ 로 접근·수신한다)
 
 # 1. 서버 세팅 (재로그인 필요 — docker 그룹 적용)
 sudo ./infra/setup-server.sh /srv/FINCH

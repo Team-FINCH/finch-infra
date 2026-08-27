@@ -13,17 +13,22 @@ services:
     # docker.sock 접근을 위해 root 로 실행한다.
     # 보안상 이상적이진 않지만 단일 VM 교육 프로젝트에서는 실용적 선택 (결정서 참고).
     user: root
-    # ACG 에서 실측으로 열려 있는 포트는 22·80·443 뿐이다 (3000 은 표기와 달리 차단됨).
-    # HTTPS 는 EC2 전환 후에 쓰므로 그때까지 443 을 Jenkins 로 쓴다. 컨테이너 내부는 8080 그대로.
-    # EC2 이전 시: 보안그룹에 8080 을 열고 이 매핑을 8080:8080 으로 되돌린 뒤 443 은 HTTPS 에 반납.
+    # 접근은 nginx(80) 경유 http://<공인IP>/jenkins/ 가 기본이다.
+    # github.com 이 443 대상 webhook 에 https 를 강제해 443 직접 노출로는 webhook 이 불가능했고,
+    # ACG 실측상 열린 포트가 22·80·443 뿐이라 nginx 경유로 전환했다 (443 직접 접속도 백업으로 유지).
+    # EC2 이전 시: 보안그룹에 8080 을 열면 prefix 없이 직접 노출로 되돌릴 수 있다.
     ports:
       - "443:8080"
     environment:
       TZ: ${TZ:-Asia/Seoul}
+      JENKINS_OPTS: "--prefix=/jenkins"
     volumes:
       - jenkins_home:/var/jenkins_home
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
+    networks:
+      - default
+      - app   # nginx 가 /jenkins 를 프록시할 수 있도록 앱 네트워크에도 연결
 
   gitlab-runner:
     image: gitlab/gitlab-runner:latest
@@ -43,3 +48,10 @@ services:
 volumes:
   jenkins_home:
   gitlab_runner_config:
+
+networks:
+  # 앱 스택(docker-compose.yml, 프로젝트명 finch)이 만드는 기본 네트워크에 합류한다.
+  # 앱 스택이 먼저 떠 있어야 이 네트워크가 존재한다.
+  app:
+    external: true
+    name: finch_default
