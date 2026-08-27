@@ -13,8 +13,10 @@ services:
     # docker.sock 접근을 위해 root 로 실행한다.
     # 보안상 이상적이진 않지만 단일 VM 교육 프로젝트에서는 실용적 선택 (결정서 참고).
     user: root
+    # ACG 가 22·80·443·3000 만 허용하므로 호스트 포트는 3000 을 쓴다.
+    # 컨테이너 내부 포트는 Jenkins 기본값 8080 그대로다.
     ports:
-      - "8080:8080"
+      - "3000:8080"
     environment:
       TZ: ${TZ:-Asia/Seoul}
     volumes:
