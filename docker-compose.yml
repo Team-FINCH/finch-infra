@@ -1,0 +1,106 @@
+# 앱 스택: nginx(+frontend 정적 파일) · backend · ai · DB 3종
+# 실행: cd infra && docker compose up -d --build
+# 배포(변경 파트만): docker compose build <서비스> && docker compose up -d <서비스>
+#
+# 포트는 nginx 80 하나만 호스트에 연다. DB·앱 포트는 Docker 내부 네트워크 전용.
+name: finch
+
+services:
+  nginx:
+    build:
+      context: ..
+      dockerfile: infra/docker/frontend.Dockerfile
+    image: finch/nginx:latest
+    container_name: finch-nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+      - ai
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ..
+      dockerfile: infra/docker/backend.Dockerfile
+    image: finch/backend:latest
+    container_name: finch-backend
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-backend:5432/${BACKEND_DB_NAME}
+      SPRING_DATASOURCE_USERNAME: ${BACKEND_DB_USER}
+      SPRING_DATASOURCE_PASSWORD: ${BACKEND_DB_PASSWORD}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+    depends_on:
+      postgres-backend:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  ai:
+    build:
+      context: ..
+      dockerfile: infra/docker/ai.Dockerfile
+    image: finch/ai:latest
+    container_name: finch-ai
+    # 외부 API 키 등은 서버에만 두는 infra/ai.env 에서 읽는다 (ai/.env.example 참고).
+    # required: false — 키 준비 전에도 뼈대 기동이 가능하게 한다 (없으면 경고만).
+    env_file:
+      - path: ai.env
+        required: false
+    # env_file 값보다 environment 가 우선한다 — 컨테이너 네트워크 기준 주소로 덮어쓴다.
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      DATABASE_URL: postgresql+asyncpg://${AI_DB_USER}:${AI_DB_PASSWORD}@postgres-ai:5432/${AI_DB_NAME}
+      BACKEND_BASE_URL: http://backend:8080
+    depends_on:
+      postgres-ai:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres-backend:
+    image: postgres:17
+    container_name: finch-postgres-backend
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      POSTGRES_USER: ${BACKEND_DB_USER}
+      POSTGRES_PASSWORD: ${BACKEND_DB_PASSWORD}
+      POSTGRES_DB: ${BACKEND_DB_NAME}
+    volumes:
+      - pg_backend_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${BACKEND_DB_USER} -d ${BACKEND_DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: finch-redis
+    restart: unless-stopped
+
+  # ai 파트 전용 DB. ai/compose.yaml(로컬 개발용)과 같은 이미지·계정 구성.
+  # 서버에서는 호스트 포트를 열지 않는다 — 5432 공개 금지.
+  postgres-ai:
+    image: pgvector/pgvector:pg17
+    container_name: finch-postgres-ai
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      POSTGRES_USER: ${AI_DB_USER}
+      POSTGRES_PASSWORD: ${AI_DB_PASSWORD}
+      POSTGRES_DB: ${AI_DB_NAME}
+    volumes:
+      - pg_ai_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AI_DB_USER} -d ${AI_DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  pg_backend_data:
+  pg_ai_data:
