@@ -8,6 +8,8 @@ RUN --mount=type=cache,target=/root/.gradle \
     chmod +x gradlew && ./gradlew bootJar --no-daemon
 
 FROM eclipse-temurin:21-jre
+# JRE 이미지에는 curl 이 없다 — compose healthcheck(/actuator/health)가 컨테이너 안에서 실행되므로 필요하다
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app/build/libs/*.jar app.jar
 EXPOSE 8080

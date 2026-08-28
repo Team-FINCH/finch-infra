@@ -3,6 +3,14 @@
 # 실행: cd infra && docker compose -f docker-compose.infra.yml up -d --build
 name: finch-infra
 
+# 컨테이너 로그 상한. 기본(json-file)은 무제한이라 장기 운영 시 디스크를 먹는다.
+# 서비스마다 logging: *default-logging 으로 참조한다.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   jenkins:
     build:
@@ -10,6 +18,7 @@ services:
       dockerfile: infra/docker/jenkins.Dockerfile
     image: finch/jenkins:latest
     container_name: finch-jenkins
+    mem_limit: 2048m
     # docker.sock 접근을 위해 root 로 실행한다.
     # 보안상 이상적이진 않지만 단일 VM 교육 프로젝트에서는 실용적 선택 (결정서 참고).
     user: root
@@ -25,6 +34,7 @@ services:
     volumes:
       - jenkins_home:/var/jenkins_home
       - /var/run/docker.sock:/var/run/docker.sock
+    logging: *default-logging
     restart: unless-stopped
     networks:
       - default
@@ -33,11 +43,13 @@ services:
   gitlab-runner:
     image: gitlab/gitlab-runner:latest
     container_name: finch-gitlab-runner
+    mem_limit: 512m
     environment:
       TZ: ${TZ:-Asia/Seoul}
     volumes:
       - gitlab_runner_config:/etc/gitlab-runner
       - /var/run/docker.sock:/var/run/docker.sock
+    logging: *default-logging
     restart: unless-stopped
     # 최초 1회 등록 (토큰: GitLab 프로젝트 Settings → CI/CD → Runners):
     #   docker exec -it finch-gitlab-runner gitlab-runner register \
