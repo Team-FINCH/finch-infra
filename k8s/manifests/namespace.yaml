@@ -1,0 +1,5 @@
+# 앱과 인프라 계층이 함께 쓰는 네임스페이스. CI/CD(Jenkins, runner)는 클러스터 밖(compose).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: finch
