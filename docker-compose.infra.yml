@@ -18,6 +18,7 @@ services:
       dockerfile: infra/docker/jenkins.Dockerfile
     image: finch/jenkins:latest
     container_name: finch-jenkins
+    mem_limit: 2048m
     # docker.sock 접근을 위해 root 로 실행한다.
     # 보안상 이상적이진 않지만 단일 VM 교육 프로젝트에서는 실용적 선택 (결정서 참고).
     user: root
@@ -42,6 +43,7 @@ services:
   gitlab-runner:
     image: gitlab/gitlab-runner:latest
     container_name: finch-gitlab-runner
+    mem_limit: 512m
     environment:
       TZ: ${TZ:-Asia/Seoul}
     volumes:

@@ -13,6 +13,8 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+# 메모리 상한: 한 컨테이너의 폭주가 이웃을 죽이지 못하게 하는 격리 장치.
+# 값은 서버 스펙 미확정 상태의 보수적 초기값이며, 실측 후 조정한다 (Jira FINCH-59).
 services:
   nginx:
     build:
@@ -20,6 +22,7 @@ services:
       dockerfile: infra/docker/frontend.Dockerfile
     image: finch/nginx:latest
     container_name: finch-nginx
+    mem_limit: 256m
     ports:
       - "80:80"
     depends_on:
@@ -34,6 +37,7 @@ services:
       dockerfile: infra/docker/backend.Dockerfile
     image: finch/backend:latest
     container_name: finch-backend
+    mem_limit: 1536m
     # backend/src/main/resources/application.yaml 이 정의한 환경변수 계약을 따른다
     environment:
       TZ: ${TZ:-Asia/Seoul}
@@ -67,6 +71,7 @@ services:
       dockerfile: infra/docker/ai.Dockerfile
     image: finch/ai:latest
     container_name: finch-ai
+    mem_limit: 1024m
     # 외부 API 키 등은 서버에만 두는 infra/ai.env 에서 읽는다 (ai/.env.example 참고).
     # required: false — 키 준비 전에도 뼈대 기동이 가능하게 한다 (없으면 경고만).
     env_file:
@@ -93,6 +98,7 @@ services:
   postgres-backend:
     image: postgres:17
     container_name: finch-postgres-backend
+    mem_limit: 1024m
     environment:
       TZ: ${TZ:-Asia/Seoul}
       POSTGRES_USER: ${BACKEND_DB_USER}
@@ -111,6 +117,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: finch-redis
+    mem_limit: 256m
     logging: *default-logging
     restart: unless-stopped
 
@@ -119,6 +126,7 @@ services:
   postgres-ai:
     image: pgvector/pgvector:pg17
     container_name: finch-postgres-ai
+    mem_limit: 1024m
     environment:
       TZ: ${TZ:-Asia/Seoul}
       POSTGRES_USER: ${AI_DB_USER}
