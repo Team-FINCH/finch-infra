@@ -58,6 +58,11 @@ services:
       TZ: ${TZ:-Asia/Seoul}
       DATABASE_URL: postgresql+asyncpg://${AI_DB_USER}:${AI_DB_PASSWORD}@postgres-ai:5432/${AI_DB_NAME}
       BACKEND_BASE_URL: http://backend:8080
+      # 서버에서는 항상 운영 모드로 고정한다. APP_ENV 기본값이 local 이라, ai.env 가 없으면
+      # (required: false 라 조용히 지나간다) 내부 토큰 검증이 통째로 꺼진 채 뜨기 때문이다
+      # (ai/app/api/deps.py — local 에서만 빈 토큰 통과). 여기 명시하면 ai.env 부재 시에도
+      # 인증이 fail-closed 로 닫힌다.
+      APP_ENV: prod
     depends_on:
       postgres-ai:
         condition: service_healthy
