@@ -5,6 +5,14 @@
 # 포트는 nginx 80 하나만 호스트에 연다. DB·앱 포트는 Docker 내부 네트워크 전용.
 name: finch
 
+# 컨테이너 로그 상한. 기본(json-file)은 무제한이라 장기 운영 시 디스크를 먹는다.
+# 서비스마다 logging: *default-logging 으로 참조한다.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   nginx:
     build:
@@ -17,6 +25,7 @@ services:
     depends_on:
       - backend
       - ai
+    logging: *default-logging
     restart: unless-stopped
 
   backend:
@@ -49,6 +58,7 @@ services:
       timeout: 3s
       retries: 5
       start_period: 60s
+    logging: *default-logging
     restart: unless-stopped
 
   ai:
@@ -77,6 +87,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    logging: *default-logging
     restart: unless-stopped
 
   postgres-backend:
@@ -94,11 +105,13 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
+    logging: *default-logging
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     container_name: finch-redis
+    logging: *default-logging
     restart: unless-stopped
 
   # ai 파트 전용 DB. ai/compose.yaml(로컬 개발용)과 같은 이미지·계정 구성.
@@ -118,6 +131,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
+    logging: *default-logging
     restart: unless-stopped
 
 volumes:
