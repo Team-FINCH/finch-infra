@@ -40,6 +40,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    # 컨테이너가 뜨는 것과 살아 있는 것은 다르다. healthcheck 가 있어야
+    # compose ps 에 healthy 가 표시되고, up -d --wait 와 배포 스모크 테스트가 성립한다.
+    # start_period: Spring 기동이 느려 초기 실패를 unhealthy 로 치지 않는 유예.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
 
   ai:
@@ -61,6 +70,13 @@ services:
     depends_on:
       postgres-ai:
         condition: service_healthy
+    # 이미지에 curl 이 없어 파이썬 표준 라이브러리로 확인한다 (앱의 /health — ai/app/api/main.py)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     restart: unless-stopped
 
   postgres-backend:
