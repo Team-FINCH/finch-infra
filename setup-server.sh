@@ -70,6 +70,16 @@ cat > /etc/cron.d/finch-db-backup <<EOF
 EOF
 chmod 644 /etc/cron.d/finch-db-backup
 
+# ── dangling 이미지 정리 cron ────────────────────────────
+# 매 배포가 같은 태그(finch/*:latest)를 재빌드하므로 이전 레이어가 dangling 으로 쌓인다.
+# prune -f 는 dangling(태그 없는 이미지)만 지운다 — -a 는 미사용 이미지 전체를 지워
+# 롤백용 이미지까지 날리므로 쓰지 않는다.
+echo "▶ 매일 04:30 dangling 이미지 정리 cron 등록"
+cat > /etc/cron.d/finch-image-prune <<EOF
+30 4 * * * root docker image prune -f >> /var/log/finch-prune.log 2>&1
+EOF
+chmod 644 /etc/cron.d/finch-image-prune
+
 echo
 echo "✓ 서버 세팅 완료. 다음 단계:"
 echo "  1. 방화벽(ACG/보안그룹)에서 22, 80, 443 만 개방 (Jenkins 는 80의 /jenkins 경로 경유) (5432·6379 등 DB 포트 금지)"
