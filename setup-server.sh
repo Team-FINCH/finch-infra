@@ -120,6 +120,15 @@ cat > /etc/cron.d/finch-db-backup <<CRON
 CRON
 chmod 644 /etc/cron.d/finch-db-backup
 
+# ── jenkins_home 백업 cron ───────────────────────────────
+# job·credentials·플러그인 설정은 이 볼륨에만 있다. DB 덤프만으로는 서버 사고 시
+# Jenkins 를 손으로 전부 재설정해야 한다 (공지: 복구 불가, 초기화만 가능).
+echo "▶ 매일 04:10 jenkins_home 백업 cron 등록"
+cat > /etc/cron.d/finch-jenkins-backup <<CRON
+10 4 * * * root ${APP_DIR}/infra/scripts/backup-jenkins.sh >> /var/log/finch-backup.log 2>&1
+CRON
+chmod 644 /etc/cron.d/finch-jenkins-backup
+
 # ── dangling 이미지 정리 cron ────────────────────────────
 # 매 배포가 같은 태그(finch/*:latest)를 재빌드하므로 이전 레이어가 dangling 으로 쌓인다.
 # prune -f 는 dangling(태그 없는 이미지)만 지운다 — -a 는 미사용 이미지 전체를 지워
