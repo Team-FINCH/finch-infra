@@ -1,0 +1,17 @@
+# 대시보드도 데이터소스와 같은 이유로 파일에서 읽는다.
+# UI 에서 만든 대시보드는 볼륨에만 남아 재현이 안 되고, 누가 언제 무엇을 바꿨는지도 남지 않는다.
+# 파일로 두면 대시보드가 코드 리뷰 대상이 되고 저장소 이력에 남는다.
+
+apiVersion: 1
+
+providers:
+  - name: finch
+    type: file
+    # UI 에서 편집은 되지만 저장은 막는다(파일이 원본이므로).
+    # 실험은 UI 에서 하고, 유지할 변경은 JSON 을 고쳐 커밋한다.
+    allowUiUpdates: false
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

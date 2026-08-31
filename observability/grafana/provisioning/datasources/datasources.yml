@@ -1,0 +1,33 @@
+# Grafana 데이터소스를 파일로 선언한다.
+# UI 로 추가하면 그 설정이 grafana_data 볼륨에만 남아, 볼륨을 잃으면 손으로 다시 만들어야 한다.
+# 여기 두면 컨테이너를 새로 만들어도 항상 같은 상태로 뜬다 (FINCH-112 의 "재생성 가능한 것은
+# 백업하지 않는다" 원칙과 짝이다 — 백업 대신 코드로 복원한다).
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      # prometheus.yml 의 scrape_interval 과 맞춘다. 어긋나면 그래프에 없는 구간이
+      # 데이터 없음으로 보이거나 계단처럼 끊긴다.
+      timeInterval: 15s
+
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      # 로그 본문에서 요청 ID 를 찾아 클릭하면 같은 요청의 다른 로그로 이동한다.
+      # X-Request-Id 는 apiSpec 이 정한 요청 식별자이며, 백엔드와 AI 로그를
+      # 한 요청 기준으로 잇는 유일한 끈이다 (분산 추적을 도입하지 않기로 한 대신의 수단).
+      derivedFields:
+        - name: RequestId
+          matcherRegex: '[Xx]-[Rr]equest-[Ii]d[=:"\s]+([0-9a-fA-F-]{8,})'
+          url: '$${__value.raw}'
+          datasourceUid: loki
