@@ -130,6 +130,17 @@ cat > /etc/cron.d/finch-image-prune <<CRON
 CRON
 chmod 644 /etc/cron.d/finch-image-prune
 
+# ── 인증서 갱신 cron ─────────────────────────────────────
+# 인증서는 90일짜리다. 갱신을 사람이 기억해서 하면 반드시 놓친다.
+# 스크립트가 만료 임박 여부를 판단하므로 매일 돌려도 안전하다 (renew-cert.sh 주석 참고).
+# webroot 방식이라 nginx 가 챌린지 파일을 서빙할 디렉터리가 미리 있어야 한다.
+mkdir -p /var/www/certbot
+echo "▶ 매일 04:20 인증서 갱신 cron 등록"
+cat > /etc/cron.d/finch-cert-renew <<CRON
+20 4 * * * root ${APP_DIR}/infra/scripts/renew-cert.sh >> /var/log/finch-cert.log 2>&1
+CRON
+chmod 644 /etc/cron.d/finch-cert-renew
+
 echo
 echo "✓ 서버 세팅 완료. 다음 단계:"
 echo "  1. 보안그룹(EC2 콘솔)에서 22, 80, 443 만 개방 (5432·6379 등 DB 포트 금지)"
