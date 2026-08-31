@@ -11,7 +11,7 @@
 | 도메인 | `finchapp.org` |
 | OS / 계정 | Ubuntu / `ubuntu` |
 | 접속 | `ssh -i finchT.pem ubuntu@finchapp.org` |
-| 서비스 URL | `http://finchapp.org/` (HTTPS 는 아래 "남은 작업") |
+| 서비스 URL | `https://finchapp.org/` (http 접근은 443 으로 301) |
 | Jenkins | `http://finchapp.org/jenkins/` (nginx 80 경유) |
 
 - `*.pem` 은 `.gitignore` 에 있다 — 절대 커밋하지 않는다. 팀원 간 공유는 별도 채널로. 키 유출 = 서버 무방비 노출.
@@ -46,8 +46,8 @@
 ```bash
 # 0. EC2 보안그룹: 22, 80, 443 만 개방 (Jenkins 는 80의 /jenkins 경로 경유). DB 포트(5432·6379)는 절대 열지 않는다.
 #    VM 내부 ufw 는 1번 스크립트가 같은 포트로 맞춘다.
-#    (github.com 이 443 대상 webhook 에 https 를 강제해 Jenkins 는 nginx 80 경유
-#     http://finchapp.org/jenkins/ 로 접근·수신한다. HTTPS 적용 후에는 https 로 바꾼다)
+#    (Jenkins 는 nginx 경유 https://finchapp.org/jenkins/ 로 접근·수신한다.
+#     github.com 이 webhook 대상에 유효한 인증서를 요구하므로 https 가 전제다)
 
 # 1. 서버 세팅 (재로그인 필요 — docker 그룹 적용)
 sudo mkdir -p /srv && sudo chown ubuntu:ubuntu /srv
@@ -118,12 +118,43 @@ compose 프로젝트 이름을 `finch` 로 고정했으므로, 수동 기동(위
 Jenkins job 설정(최초 1회)과 Credentials 목록은 `Jenkinsfile` 상단 주석 참고.
 수동 전체 배포가 필요하면 job 의 `FORCE_ALL` 파라미터를 켜고 실행한다.
 
+## HTTPS 와 인증서
+
+발급처는 Let's Encrypt, 대상은 `finchapp.org` 한 건이다.
+
+**발급과 갱신의 방식이 다르다.** 최초 발급은 nginx 가 없던 시점이라 `standalone`
+(certbot 이 직접 80 을 점유해 검증) 으로 했다. 갱신까지 standalone 으로 두면 갱신할 때마다
+nginx 를 내려야 해서 서비스가 끊긴다. 그래서 갱신은 `webroot` 로 한다 — nginx 가 뜬 채로
+`/.well-known/acme-challenge/` 만 서빙하면 되므로 무중단이다.
+
+- 인증서: `/etc/letsencrypt/live/finchapp.org/` (호스트). nginx 컨테이너에 읽기 전용 마운트
+- 챌린지 경로: `/var/www/certbot` (호스트). certbot 이 쓰고 nginx 가 읽는다
+- 갱신: `infra/scripts/renew-cert.sh`, 매일 04:20 cron. 만료가 임박하지 않으면 아무것도 하지 않는다
+- 로그: `/var/log/finch-cert.log`
+
+수동 확인:
+
+```bash
+sudo openssl x509 -in /etc/letsencrypt/live/finchapp.org/fullchain.pem -noout -dates
+sudo /home/ubuntu/FINCH/infra/scripts/renew-cert.sh
+```
+
+**nginx.conf 를 고칠 때 주의.** 80 의 `/.well-known/acme-challenge/` location 을 지우거나
+`location /` 리다이렉트 뒤로 옮기면 갱신이 조용히 실패한다. 인증서가 만료되기 전까지
+증상이 나타나지 않으므로 발견이 늦는다.
+
+**배포 전 검증.** 인증서 경로가 틀리면 nginx 가 기동 자체에 실패해 사이트 전체가 죽는다.
+설정을 바꾸면 반드시 실제 인증서를 마운트한 채 문법 검사를 돌린다.
+
+```bash
+docker run --rm   -v $PWD/infra/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro   -v /etc/letsencrypt:/etc/letsencrypt:ro   nginx:1.27-alpine nginx -t
+```
+
 ## 남은 작업 (초안 상태)
 
 - [ ] `docker/backend.Dockerfile` — backend 파트가 `build.gradle`·`gradlew` 커밋 후 동작. Java 버전 확인
 - [ ] nginx `/api` 프리픽스 전달 방식 — backend 컨트롤러 매핑이 정해지면 확정
 - [ ] 루트 `.gitlab-ci.yml` 에 `include: - local: ai/.gitlab-ci.yml` 추가 (팀 결정, ADR-0002)
 - [ ] Jenkins job 생성: Pipeline from SCM + GitLab webhook 연결 + Credentials 2건 등록
-- [ ] HTTPS: 도메인(`finchapp.org`)이 생겼으니 certbot 으로 인증서 발급 → `nginx.conf` 에 443 server 블록 추가,
-      webhook URL 을 https 로 변경. (443 은 이를 위해 비워 두었다 — Jenkins 443 직접 노출은 제거함)
+- [x] HTTPS 적용: 443 종단, 80 → 443 리다이렉트, webroot 갱신 cron (2026-09-01, FINCH-114)
 - [x] EC2 전환: `setup-server.sh` Ubuntu/ufw 대응, 접속 정보·이전 절차 문서화 (2026-08-31)
