@@ -1,0 +1,57 @@
+// Alloy: 도커 컨테이너의 stdout/stderr 를 읽어 Loki 로 보낸다.
+//
+// 애플리케이션은 아무것도 하지 않는다. 표준 출력에 찍기만 하면 도커 런타임이
+// 그것을 자기 로그 저장소에 쓰고, Alloy 가 도커 API 로 그것을 읽어 간다.
+// 그래서 backend·ai·nginx·DB 어느 파트의 코드도 고칠 필요가 없다.
+
+// 도커 데몬에게 "지금 떠 있는 컨테이너 목록"을 주기적으로 물어본다.
+// 새 컨테이너가 뜨면 자동으로 수집 대상이 된다 — 배포마다 설정을 고칠 필요가 없다.
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "15s"
+}
+
+// 도커가 주는 원시 메타데이터를 Loki 라벨로 다듬는다.
+// 라벨은 Loki 에서 유일하게 색인되는 값이라, 여기서 정한 것이 곧 조회 축이 된다.
+// 라벨 종류를 늘리면 스트림 수가 곱으로 늘어 색인이 커지므로 최소한만 만든다.
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // 도커 컨테이너 이름은 "/finch-backend" 처럼 앞에 슬래시가 붙는다. 떼어낸다.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  // compose 가 붙여주는 서비스 이름. 컨테이너를 다시 만들어도 유지되므로
+  // "backend 로그" 처럼 안정적인 조회 축이 된다.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  // 어느 스택(finch / finch-infra / finch-observability)의 컨테이너인지.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "stack"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  labels     = { job = "docker" }
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+  // 모든 스트림에 공통으로 붙는 라벨. Prometheus 의 external_labels 와 같은 값을 써서
+  // 지표와 로그를 같은 축으로 필터할 수 있게 맞춘다.
+  external_labels = {
+    env = "prod",
+  }
+}
