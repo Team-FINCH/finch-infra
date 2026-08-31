@@ -99,10 +99,12 @@ pipeline {
             when { expression { env.SERVICES } }
             steps {
                 // Jenkins 는 컨테이너라 localhost 가 호스트가 아니다 — 앱 네트워크(finch_default)에
-                // 붙어 있으므로 컨테이너 이름으로 nginx 를 직접 부른다.
-                // 프런트 정적 서빙과 backend 헬스를 실제 사용자 경로(nginx 경유)로 확인한다.
+                // 붙어 있으므로 컨테이너 이름으로 직접 부른다.
+                // 프런트는 실제 사용자 경로(nginx 경유)로, backend 헬스는 컨테이너 직접 호출로 확인한다.
+                // (actuator 는 /api 아래가 아니라 루트에 있어 nginx 경유로는 404 — EC2 실측.
+                //  nginx 에 actuator 를 노출하는 것은 관리 엔드포인트 공개라 하지 않는다)
                 sh 'curl -fsS -o /dev/null --retry 3 --retry-delay 3 http://finch-nginx/'
-                sh 'curl -fsS --retry 3 --retry-delay 3 http://finch-nginx/api/actuator/health'
+                sh 'curl -fsS --retry 3 --retry-delay 3 http://finch-backend:8080/actuator/health'
             }
         }
     }
