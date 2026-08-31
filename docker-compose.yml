@@ -25,6 +25,13 @@ services:
     mem_limit: 256m
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+      # 인증서는 호스트의 certbot 이 관리한다. 컨테이너는 읽기만 한다.
+      # 이 마운트가 없으면 nginx 가 ssl_certificate 를 못 찾아 기동 자체에 실패한다.
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      # ACME 챌린지 파일은 certbot 이 호스트에 쓰고 nginx 가 80 으로 서빙한다.
+      - /var/www/certbot:/var/www/certbot:ro
     depends_on:
       - backend
       - ai
