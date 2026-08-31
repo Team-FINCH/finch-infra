@@ -22,12 +22,12 @@ services:
     # docker.sock 접근을 위해 root 로 실행한다.
     # 보안상 이상적이진 않지만 단일 VM 교육 프로젝트에서는 실용적 선택 (결정서 참고).
     user: root
-    # 접근은 nginx(80) 경유 http://<공인IP>/jenkins/ 가 기본이다.
-    # github.com 이 443 대상 webhook 에 https 를 강제해 443 직접 노출로는 webhook 이 불가능했고,
-    # ACG 실측상 열린 포트가 22·80·443 뿐이라 nginx 경유로 전환했다 (443 직접 접속도 백업으로 유지).
-    # EC2 이전 시: 보안그룹에 8080 을 열면 prefix 없이 직접 노출로 되돌릴 수 있다.
-    ports:
-      - "443:8080"
+    # 접근은 nginx(80) 경유 http://finchapp.org/jenkins/ 로만 한다 — 호스트 포트를 열지 않는다.
+    #  - github.com 이 443 대상 webhook 에 https 를 강제해 443 직접 노출로는 webhook 이 불가능했다.
+    #  - EC2 에서는 443 을 nginx HTTPS(certbot) 에 써야 하므로 NCP 시절의 "443:8080" 백업 노출을 제거했다.
+    #  - EC2 공지: 8080 같은 솔루션 기본 포트를 외부에 그대로 열지 말 것 → 아예 publish 하지 않는다.
+    # nginx 가 죽어 Jenkins 에 직접 붙어야 하면 임시로 ports: ["127.0.0.1:18080:8080"] 을 켜고
+    # ssh -i finchT.pem -L 18080:127.0.0.1:18080 ubuntu@finchapp.org 로 터널링한다 (ufw 개방 불필요).
     environment:
       TZ: ${TZ:-Asia/Seoul}
       JENKINS_OPTS: "--prefix=/jenkins"
