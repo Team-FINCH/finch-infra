@@ -1,0 +1,144 @@
+# 관측 스택: Prometheus(지표 저장) · Grafana(조회) · Loki(로그 저장) · Alloy(로그 수집)
+#            + cAdvisor(컨테이너 자원) · node-exporter(호스트 자원)
+# 앱·CI 스택과 수명 주기를 분리한다 — 앱 재배포가 지표 이력을 날리지 않도록.
+# 실행: cd infra && docker compose -f docker-compose.observability.yml up -d
+#
+# 외부에 포트를 열지 않는다. Grafana·Prometheus 는 127.0.0.1 에만 바인딩하므로
+# 서버 밖에서는 SSH 터널로만 접근된다 (infra/README "관측 스택" 절).
+#   ssh -i finchT.pem -L 3000:127.0.0.1:3000 ubuntu@finchapp.org
+name: finch-observability
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ── 지표 ────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: finch-prometheus
+    mem_limit: 512m
+    # 127.0.0.1 바인딩: 커널이 외부 인터페이스에 붙이지 않으므로 ufw 규칙과 무관하게 외부 차단된다.
+    ports:
+      - "127.0.0.1:9090:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # 보관 기간과 용량 상한을 함께 건다. 기간만 걸면 지표 종류가 늘 때 디스크가 먼저 찬다.
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=4GB
+      - --web.enable-lifecycle
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    logging: *default-logging
+    restart: unless-stopped
+    networks:
+      - default
+      - app   # backend 의 /actuator/prometheus 를 긁으려면 앱 네트워크에 있어야 한다
+
+  # ── 컨테이너별 자원 지표는 이번 범위에서 뺐다 ────────────
+  # cAdvisor 를 넣으려 했으나 이 서버에서 동작하지 않는다.
+  # 원인: Docker 스토리지 드라이버가 overlayfs(Docker 25+ 의 새 이름)인데
+  # cAdvisor v0.49~v0.52 가 이를 처리하지 못해 Docker 데몬 조회에 실패한다
+  # (metrics 의 dockerVersion 이 빈 값, container 지표에 name 라벨이 붙지 않음 — 2026-09-01 서버 실측).
+  # 결과적으로 cgroup 경로(id)만 남아 어느 컨테이너인지 식별할 수 없다.
+  #
+  # 대신 이렇게 메운다:
+  #  - 지금: 호스트 전체 자원(node-exporter) + 백엔드 애플리케이션 지표(micrometer)
+  #  - FINCH-59(리소스 실측) 진행 시: 부하를 걸고 docker stats 로 직접 측정
+  #  - FINCH-39(k3s 전환) 이후: kubelet 이 cAdvisor 를 내장 노출하므로 자연히 해결된다
+  #    (쿠버네티스에서는 컨테이너 지표가 별도 구성 요소가 아니라 kubelet 의 기본 기능이다)
+
+  # 호스트 자원. 디스크 잔량이 여기서 나온다 — 백업·이미지·로그가 쌓여
+  # 디스크가 차면 컨테이너 지표는 멀쩡한데 서버가 죽는다.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: finch-node-exporter
+    mem_limit: 128m
+    command:
+      - --path.rootfs=/host
+    pid: host
+    # 공식 예시는 ro,rslave 를 쓴다. rslave 는 컨테이너 기동 뒤에 호스트에서 새로
+    # 마운트된 파일시스템까지 보이게 하는 옵션인데, 호스트 루트가 shared 마운트가
+    # 아닌 환경(도커 데스크톱 등)에서는 기동 자체가 실패한다.
+    # 서버 파일시스템 구성이 고정이라 이득이 없어 단순 읽기 전용으로 둔다.
+    volumes:
+      - /:/host:ro
+    logging: *default-logging
+    restart: unless-stopped
+
+  # ── 로그 ────────────────────────────────────────────────
+  loki:
+    image: grafana/loki:3.3.2
+    container_name: finch-loki
+    mem_limit: 512m
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./observability/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    logging: *default-logging
+    restart: unless-stopped
+
+  # 컨테이너 stdout 을 읽어 Loki 로 보낸다. 앱 코드 변경이 0 인 이유가 여기 있다 —
+  # 애플리케이션은 평소대로 표준 출력에 찍기만 하고, 수집은 런타임 밖에서 일어난다.
+  # k3s 로 옮겨도 같은 원리(CRI 로그 규약)라 수집 방식이 유지된다.
+  alloy:
+    image: grafana/alloy:v1.5.1
+    container_name: finch-alloy
+    mem_limit: 256m
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./observability/alloy-config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      - loki
+    logging: *default-logging
+    restart: unless-stopped
+
+  # ── 조회 ────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: finch-grafana
+    mem_limit: 384m
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      # 기본값을 두지 않는다. 값이 없으면 기동을 거부한다 — ai 의 APP_ENV 와 같은 원칙으로,
+      # "설정을 빠뜨린 배포"가 admin/admin 으로 뜨는 일을 막는다 (FINCH-99 참고).
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?infra/.env 에 GRAFANA_ADMIN_PASSWORD 를 설정하세요}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      # 대시보드 JSON. provisioning/dashboards/dashboards.yml 이 이 경로를 읽는다.
+      # grafana_data 볼륨 위에 겹쳐 마운트하므로 볼륨을 지워도 대시보드는 살아남는다.
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+    logging: *default-logging
+    restart: unless-stopped
+
+volumes:
+  prometheus_data:
+  loki_data:
+  alloy_data:
+  grafana_data:
+
+networks:
+  # 앱 스택(docker-compose.yml, 프로젝트명 finch)이 만드는 기본 네트워크에 합류한다.
+  # 앱 스택이 먼저 떠 있어야 이 네트워크가 존재한다.
+  app:
+    external: true
+    name: finch_default

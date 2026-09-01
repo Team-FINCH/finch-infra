@@ -1,0 +1,59 @@
+# Loki 단일 프로세스 구성. 로그를 파일 시스템에 저장한다.
+#
+# Loki 가 Elasticsearch 와 다른 점: 로그 본문을 색인하지 않고 라벨만 색인한다.
+# 그래서 저장 비용과 메모리가 훨씬 적게 든다. 대신 "본문 전체 검색"은 느리고,
+# 먼저 라벨로 범위를 좁힌 뒤 그 안에서 훑는 사용 방식을 전제한다.
+# (예: service="backend" 로 좁힌 뒤 요청 ID 로 grep)
+# 단일 EC2 에 서비스·Jenkins 와 함께 사는 지금 조건에서는 이 트레이드오프가 맞다.
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  # info 로 두면 Loki 자신의 로그가 Loki 로 다시 들어와 양이 불어난다.
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  # 단일 인스턴스라 복제본은 1. 링도 메모리에만 둔다(외부 KV 저장소 불필요).
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # 7일. 프로젝트 기간(9/28 발표)을 덮으면서 디스크를 과하게 쓰지 않는 선.
+  retention_period: 168h
+  # 보관 기간보다 오래된 로그는 거부한다. 시계가 어긋난 컨테이너가
+  # 과거 시점으로 로그를 밀어 넣어 색인을 어지럽히는 것을 막는다.
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  # 한 스트림이 폭주해 전체 수집을 마비시키지 않도록 유량 상한을 둔다.
+  per_stream_rate_limit: 8MB
+  per_stream_rate_limit_burst: 16MB
+
+# retention_period 는 선언일 뿐이고, 실제로 지우는 주체는 compactor 다.
+# 이걸 켜지 않으면 기간이 지나도 파일이 남아 디스크가 계속 찬다.
+compactor:
+  working_directory: /loki/compactor
+  delete_request_store: filesystem
+  retention_enabled: true
+
+analytics:
+  reporting_enabled: false
