@@ -102,6 +102,10 @@ if [ "$PKG" = apt ]; then
   ufw allow 22/tcp    # SSH — enable 전에 반드시 먼저 허용 (세션 유지)
   ufw allow 80/tcp
   ufw allow 443/tcp
+  # CI(Testcontainers): job 컨테이너가 docker0 게이트웨이(172.17.0.1)의 임시 공개 포트로
+  # 시험용 Postgres·Redis·Ryuk 에 접속한다. 이 경로는 호스트 INPUT 을 타서 ufw 에 막힌다.
+  # docker0 유입은 컨테이너발 내부 트래픽뿐이라 외부(EC2 보안그룹) 노출과 무관하다.
+  ufw allow in on docker0 comment 'CI Testcontainers: container -> host published ports'
   ufw --force enable  # --force: 대화형 확인 생략 (멱등 — 이미 enable 이면 그대로)
   ufw status verbose
 elif systemctl is-active --quiet firewalld; then
