@@ -55,6 +55,9 @@ services:
       POSTGRES_PASSWORD: ${BACKEND_DB_PASSWORD}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      JWT_SECRET: ${BACKEND_JWT_SECRET}
+      KAKAO_CLIENT_ID: ${BACKEND_KAKAO_CLIENT_ID}
+      KAKAO_CLIENT_SECRET: ${BACKEND_KAKAO_CLIENT_SECRET}
     depends_on:
       postgres-backend:
         condition: service_healthy
