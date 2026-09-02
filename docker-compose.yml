@@ -20,6 +20,10 @@ services:
     build:
       context: ..
       dockerfile: infra/docker/frontend.Dockerfile
+      # 프런트를 빌드하는 것이 nginx 이미지라 build arg 가 여기 붙는다.
+      # REST API 키는 공개 client_id 라 번들에 실려도 되는 값이다.
+      args:
+        VITE_KAKAO_REST_API_KEY: ${KAKAO_CLIENT_ID:?KAKAO_CLIENT_ID 가 필요합니다}
     image: finch/nginx:latest
     container_name: finch-nginx
     mem_limit: 256m
@@ -55,9 +59,13 @@ services:
       POSTGRES_PASSWORD: ${BACKEND_DB_PASSWORD}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
-      JWT_SECRET: ${BACKEND_JWT_SECRET}
-      KAKAO_CLIENT_ID: ${BACKEND_KAKAO_CLIENT_ID}
-      KAKAO_CLIENT_SECRET: ${BACKEND_KAKAO_CLIENT_SECRET}
+      # compose 는 미정의 변수를 빈 문자열로 넘긴다. 그러면 application.yaml 이 기본값을
+      # 두지 않은 의도가 무너지고 빈 서명 키로 조용히 기동한다 — :? 로 여기서 차단한다.
+      JWT_SECRET: ${BACKEND_JWT_SECRET:?BACKEND_JWT_SECRET 가 필요합니다}
+      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID:?KAKAO_CLIENT_ID 가 필요합니다}
+      # 콘솔에서 Client Secret 을 켜지 않은 앱은 값이 없다. 빈 문자열이면
+      # 토큰 교환 폼에서 client_secret 파라미터가 빠진다 (KakaoOAuthClient.tokenForm)
+      KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET:-}
     depends_on:
       postgres-backend:
         condition: service_healthy
