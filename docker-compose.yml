@@ -54,9 +54,9 @@ services:
       TZ: ${TZ:-Asia/Seoul}
       POSTGRES_HOST: postgres-backend
       POSTGRES_PORT: "5432"
-      POSTGRES_DB: ${BACKEND_DB_NAME}
-      POSTGRES_USER: ${BACKEND_DB_USER}
-      POSTGRES_PASSWORD: ${BACKEND_DB_PASSWORD}
+      POSTGRES_DB: ${BACKEND_DB_NAME:?BACKEND_DB_NAME 가 필요합니다}
+      POSTGRES_USER: ${BACKEND_DB_USER:?BACKEND_DB_USER 가 필요합니다}
+      POSTGRES_PASSWORD: ${BACKEND_DB_PASSWORD:?BACKEND_DB_PASSWORD 가 필요합니다}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       # compose 는 미정의 변수를 빈 문자열로 넘긴다. 그러면 application.yaml 이 기본값을
@@ -98,7 +98,7 @@ services:
     # env_file 값보다 environment 가 우선한다 — 컨테이너 네트워크 기준 주소로 덮어쓴다.
     environment:
       TZ: ${TZ:-Asia/Seoul}
-      DATABASE_URL: postgresql+asyncpg://${AI_DB_USER}:${AI_DB_PASSWORD}@postgres-ai:5432/${AI_DB_NAME}
+      DATABASE_URL: postgresql+asyncpg://${AI_DB_USER:?AI_DB_USER 가 필요합니다}:${AI_DB_PASSWORD:?AI_DB_PASSWORD 가 필요합니다}@postgres-ai:5432/${AI_DB_NAME:?AI_DB_NAME 가 필요합니다}
       BACKEND_BASE_URL: http://backend:8080
       # 서버에서는 항상 운영 모드로 고정한다. APP_ENV 기본값이 local 이라, ai.env 가 없으면
       # (required: false 라 조용히 지나간다) 내부 토큰 검증이 통째로 꺼진 채 뜨기 때문이다
@@ -124,9 +124,9 @@ services:
     mem_limit: 1024m
     environment:
       TZ: ${TZ:-Asia/Seoul}
-      POSTGRES_USER: ${BACKEND_DB_USER}
-      POSTGRES_PASSWORD: ${BACKEND_DB_PASSWORD}
-      POSTGRES_DB: ${BACKEND_DB_NAME}
+      POSTGRES_USER: ${BACKEND_DB_USER:?BACKEND_DB_USER 가 필요합니다}
+      POSTGRES_PASSWORD: ${BACKEND_DB_PASSWORD:?BACKEND_DB_PASSWORD 가 필요합니다}
+      POSTGRES_DB: ${BACKEND_DB_NAME:?BACKEND_DB_NAME 가 필요합니다}
     volumes:
       - pg_backend_data:/var/lib/postgresql/data
     healthcheck:
@@ -152,9 +152,9 @@ services:
     mem_limit: 1024m
     environment:
       TZ: ${TZ:-Asia/Seoul}
-      POSTGRES_USER: ${AI_DB_USER}
-      POSTGRES_PASSWORD: ${AI_DB_PASSWORD}
-      POSTGRES_DB: ${AI_DB_NAME}
+      POSTGRES_USER: ${AI_DB_USER:?AI_DB_USER 가 필요합니다}
+      POSTGRES_PASSWORD: ${AI_DB_PASSWORD:?AI_DB_PASSWORD 가 필요합니다}
+      POSTGRES_DB: ${AI_DB_NAME:?AI_DB_NAME 가 필요합니다}
     volumes:
       - pg_ai_data:/var/lib/postgresql/data
     healthcheck:
