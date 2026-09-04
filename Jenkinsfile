@@ -2,7 +2,8 @@
 //
 // Jenkins job 설정(최초 1회):
 //   - Pipeline from SCM 으로 이 파일을 지정 (branch: master)
-//   - GitLab plugin 설치 후 webhook 연결: http://finchapp.org/jenkins/project/<job이름> (nginx 80 경유, HTTPS 적용 후 https 로)
+//   - GitLab plugin 설치 후 webhook 연결: https://finchapp.org/jenkins/project/<job이름>
+//     (nginx 443 종단 경유. GitLab webhook 은 리다이렉트를 따라가지 않으므로 https 로 등록해야 한다)
 //   - Credentials 등록 (결정: 비밀값은 Jenkins Credentials 에 보관, 배포 시점에 주입)
 //       finch-env     (Secret file) : infra/.env.example 을 채운 파일
 //       finch-ai-env  (Secret file) : ai/.env.example 을 채운 파일
