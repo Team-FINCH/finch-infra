@@ -98,14 +98,79 @@ docker compose stop backend ai
 sudo ./scripts/restore-db.sh /tmp/backend-<stamp>.sql.gz /tmp/ai-<stamp>.sql.gz
 docker compose start backend ai
 
-# [EC2] 4. CI/CD 스택 기동 후 Jenkins 재설정 (jenkins_home 볼륨은 새로 만드는 편이 깔끔하다)
-#   - Credentials 2건 재등록: finch-env, finch-ai-env (Secret file)
+# [EC2] 4. CI/CD 스택 기동 후 Jenkins 설정
+#   jenkins_home 백업이 있으면 아래 "백업과 복원" 의 복원 절차를 쓴다 (손으로 재설정할 필요 없음).
+#   백업이 없을 때만 수동 재설정:
+#   - Credentials 3건 재등록: finch-env, finch-ai-env (Secret file), GitLab 접근 토큰
 #   - job: Pipeline from SCM, branch master
-#   - GitLab webhook URL 변경: http://finchapp.org/jenkins/project/<job이름>
+#   - GitLab webhook URL 변경: https://finchapp.org/jenkins/project/<job이름>
 ```
 
 이전 완료 후 GitLab webhook 이 새 서버로만 가는지 확인하고 NCP 쪽 Jenkins 는 내려둔다
 (두 서버가 동시에 배포를 받으면 안 된다).
+
+## 백업과 복원
+
+공지상 **서버 사고 시 복구는 지원되지 않고 초기화만 가능**하다. 초기화 후 백업으로 되살리는 경로가 유일한 방어선이므로, 아래 절차는 실제로 돌려본 것만 적는다.
+
+### 무엇을 언제 백업하는가
+
+| 대상 | 스크립트 | cron | 크기 | 보존 |
+|---|---|---|---|---|
+| DB 2종 (`finch_back`, `finch_ai`) | `backup-db.sh` | 매일 04:00 | 각 수 KB | 7일 |
+| `jenkins_home` 볼륨 | `backup-jenkins.sh` | 매일 04:10 | 약 157MB | 7일 |
+
+cron 은 `/etc/cron.d/finch-db-backup`, `/etc/cron.d/finch-jenkins-backup` 에 있고 로그는 `/var/log/finch-backup.log` 로 간다. 저장 위치는 `/var/backups/finch`.
+
+`jenkins_home` 백업은 `workspace`, `caches`, `war` 를 제외한다. 재생성 가능하기 때문이다. 그래도 157MB 인 것은 **`plugins` 가 198MB** 라서인데, 플러그인이 Dockerfile 에 고정돼 있지 않고 UI 로 설치돼 있어 **이 백업이 플러그인의 유일한 사본**이다. 제외하면 복원 시 94개를 손으로 다시 깔아야 하고 버전도 어긋난다.
+
+### DB 복원
+
+```bash
+cd /srv/FINCH/infra
+docker compose stop backend ai          # 앱을 먼저 멈춘다
+sudo ./scripts/restore-db.sh /var/backups/finch/backend-<stamp>.sql.gz \
+                             /var/backups/finch/ai-<stamp>.sql.gz
+docker compose start backend ai
+```
+
+스크립트는 **대상 DB 를 DROP 후 다시 만든다.** 기존 데이터가 사라지므로 대상을 확인하고 실행할 것.
+
+### jenkins_home 복원
+
+```bash
+docker compose -f docker-compose.cicd.yml stop jenkins
+docker run --rm -v finch-infra_jenkins_home:/dest -v /var/backups/finch:/src:ro alpine \
+  sh -c 'rm -rf /dest/* /dest/.[!.]* 2>/dev/null; tar xzf /src/jenkins-home-<stamp>.tar.gz -C /dest'
+docker compose -f docker-compose.cicd.yml start jenkins
+```
+
+job 설정, credentials, 플러그인이 함께 살아난다. `secrets/master.key` 와 `secrets/hudson.util.Secret` 이 백업에 들어 있어 credentials 복호화도 된다 — 이 둘이 빠지면 credentials 는 복구 불가다.
+
+### 실측 (2026-09-04 리허설)
+
+라이브를 건드리지 않고, 덤프를 임시 DB 로 복원하고 백업 tar 로 임시 Jenkins 를 별도 포트에 띄워 확인했다.
+
+| 항목 | 결과 |
+|---|---|
+| backend DB 복원 | 0.3초, 12개 테이블 행 수 원본과 일치 |
+| ai DB 복원 | 0.3초, 16개 테이블 행 수 원본과 일치 |
+| 확장 생존 | `vector 0.8.6`, `pg_trgm 1.6` 복원 후 유지 |
+| jenkins_home 압축 해제 | 2초 (205MB) |
+| 임시 Jenkins 기동 | 12초, job `finch-deploy` 적재, 플러그인 94개, credentials 3건 |
+| 기동 중 SEVERE, 복호화 실패 | 0건 |
+| **총 소요** | **DB 1초 미만 + Jenkins 16초** |
+
+**주의: 현재 DB 에 데이터가 거의 없다** (`users` 2행). 위 0.3초는 지금 데이터량 기준이고, 시연 데이터가 쌓이면 달라진다. 데이터가 들어온 뒤 한 번 더 재야 한다.
+
+credentials 는 기동 시점에 복호화 오류가 없다는 것까지 확인했다. Jenkins 는 실제 사용 시점에 복호화하므로 완전한 증명은 빌드 실행인데, 그러면 운영에 배포되므로 리허설에서는 하지 않았다.
+
+### 리허설 다시 돌리는 법
+
+운영에 영향을 주지 않는 방식이다. 인프라 변경 전마다 한 번씩 돌린다.
+
+- **DB**: 원본 DB 이름 뒤에 `_restoretest` 를 붙인 임시 DB 를 만들어 덤프를 붓고, `information_schema.tables` 기준으로 테이블별 `count(*)` 를 원본과 대조한 뒤 임시 DB 를 지운다.
+- **Jenkins**: tar 를 `/tmp` 에 풀고 `--user root` 로 `127.0.0.1:18080` 에 임시 컨테이너를 띄운다. 인증 없는 `/api/json` 이 **403** 이면 보안 설정이 복원된 것이고, 200 이면서 셋업 마법사가 뜨면 실패다.
 
 ## 배포 (루트 `Jenkinsfile` 이 수행)
 
