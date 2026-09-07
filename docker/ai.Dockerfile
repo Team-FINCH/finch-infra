@@ -8,6 +8,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY ai/ ./
 
 EXPOSE 8000
-# nginx 가 /ai 프리픽스를 벗겨서 넘겨주므로 앱은 / 기준으로 동작한다.
-# /docs 링크가 어긋나면 --root-path /ai 옵션을 추가할 것 (infra/nginx/nginx.conf 주석 참고).
+# 백엔드가 컨테이너 네트워크에서 http://ai:8000 으로 직접 호출하므로 앱은 / 기준으로 동작한다.
+# (외부 노출 없음 — infra/nginx/nginx.conf 주석 참고)
 CMD ["sh", "-c", "alembic upgrade head && uvicorn app.api.main:app --host 0.0.0.0 --port 8000"]

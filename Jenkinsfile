@@ -2,7 +2,8 @@
 //
 // Jenkins job 설정(최초 1회):
 //   - Pipeline from SCM 으로 이 파일을 지정 (branch: master)
-//   - GitLab plugin 설치 후 webhook 연결: http://<공인IP>/jenkins/project/<job이름> (nginx 80 경유)
+//   - GitLab plugin 설치 후 webhook 연결: https://finchapp.org/jenkins/project/<job이름>
+//     (nginx 443 종단 경유. GitLab webhook 은 리다이렉트를 따라가지 않으므로 https 로 등록해야 한다)
 //   - Credentials 등록 (결정: 비밀값은 Jenkins Credentials 에 보관, 배포 시점에 주입)
 //       finch-env     (Secret file) : infra/.env.example 을 채운 파일
 //       finch-ai-env  (Secret file) : ai/.env.example 을 채운 파일
@@ -86,9 +87,25 @@ pipeline {
         stage('배포') {
             when { expression { env.SERVICES } }
             steps {
-                // 변경된 서비스 컨테이너만 교체 (수 초 다운타임 허용)
-                sh "${COMPOSE} up -d ${env.SERVICES}"
+                // 변경된 서비스 컨테이너만 교체 (수 초 다운타임 허용).
+                // --wait: healthcheck 가 healthy 가 될 때까지 기다린다. 컨테이너가 뜨자마자
+                // 죽는 배포가 '성공'으로 기록되는 것을 여기서 차단한다 (healthcheck 없는
+                // 서비스는 기존처럼 started 기준).
+                sh "${COMPOSE} up -d --wait ${env.SERVICES}"
                 sh "${COMPOSE} ps"
+            }
+        }
+
+        stage('스모크 테스트') {
+            when { expression { env.SERVICES } }
+            steps {
+                // Jenkins 는 컨테이너라 localhost 가 호스트가 아니다 — 앱 네트워크(finch_default)에
+                // 붙어 있으므로 컨테이너 이름으로 직접 부른다.
+                // 프런트는 실제 사용자 경로(nginx 경유)로, backend 헬스는 컨테이너 직접 호출로 확인한다.
+                // (actuator 는 /api 아래가 아니라 루트에 있어 nginx 경유로는 404 — EC2 실측.
+                //  nginx 에 actuator 를 노출하는 것은 관리 엔드포인트 공개라 하지 않는다)
+                sh 'curl -fsS -o /dev/null --retry 3 --retry-delay 3 http://finch-nginx/'
+                sh 'curl -fsS --retry 3 --retry-delay 3 http://finch-backend:8080/actuator/health'
             }
         }
     }

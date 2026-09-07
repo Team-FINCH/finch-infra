@@ -1,28 +1,62 @@
 # infra — 배포 인프라
 
 인프라 결정의 배경과 근거는 팀 결정서(FINCH 인프라 결정서)를 참고한다.
-모든 서버 설정은 이 디렉터리에 코드로 남긴다 — 서버에서 손으로 만진 설정은 EC2 이사 때 잃어버린다.
+모든 서버 설정은 이 디렉터리에 코드로 남긴다 — 서버에서 손으로 만진 설정은 서버 이사 때 잃어버린다.
+
+## 서버 (EC2)
+
+| 항목 | 값 |
+|---|---|
+| 서버명 | finch |
+| 도메인 | `finchapp.org` |
+| OS / 계정 | Ubuntu / `ubuntu` |
+| 접속 | `ssh -i finchT.pem ubuntu@finchapp.org` |
+| 서비스 URL | `https://finchapp.org/` (http 접근은 443 으로 301) |
+| Jenkins | `http://finchapp.org/jenkins/` (nginx 80 경유) |
+
+- `*.pem` 은 `.gitignore` 에 있다 — 절대 커밋하지 않는다. 팀원 간 공유는 별도 채널로. 키 유출 = 서버 무방비 노출.
+- 제공 기간: 프로젝트 종료 시까지 (종료 후 7일 이내 삭제). 웹 콘솔 없음, SSH 만 가능.
+- **ufw 는 반드시 enable 상태로 유지한다** (규정 — 지급 시 이미 enable + 22 만 허용 상태).
+  `setup-server.sh` 가 22·80·443 만 허용하고 enable 한다. `sudo ufw status numbered` 로 확인.
+  - 포트 추가: `sudo ufw allow <port>/tcp` (active 상태에서 즉시 반영). 절대 `ufw disable` 하지 않는다.
+  - 포트 삭제: `sudo ufw status numbered` 로 번호 확인 → `sudo ufw delete <번호>` (하나씩) → **`sudo ufw enable` 다시 실행해야 적용**.
+  - 방화벽 작업 전 ssh 터미널을 2~3개 열어 둔다. 22 가 막히면 복구 불가(초기화 요청만 가능).
+- 솔루션 기본 포트(8080·9000·5000 등)는 외부에 열지 않는다. 우리 구성은 host 에 80 만 publish 하고
+  Jenkins·backend·ai·DB 는 Docker 내부 네트워크에만 둔다 — 이것이 공지의 "기본 포트 변경" 요구를 충족하는 방식이다.
+- `/home`·시스템 디렉터리 퍼미션, `~/.ssh/authorized_keys` 를 건드리지 않는다. 해킹·감염 시 복구 불가(초기화만 가능).
+- DB 비밀번호 등은 `.env.example` 의 `change-me` 를 반드시 강한 값으로 바꾼다.
+- **비밀값의 원본은 Jenkins Credentials 다** (`finch-env`, `finch-ai-env`). 배포 때마다 서버의
+  `infra/.env`·`infra/ai.env` 로 주입되고 배포 후 삭제되므로, 서버 파일과 팀원 로컬 사본은
+  **재설정용 백업일 뿐 원본이 아니다.** 값을 바꿀 때는 Credentials 를 먼저 고치고 나머지를 맞춘다 —
+  사본이 세 곳(로컬·서버·Credentials)이라 원본을 정해두지 않으면 조용히 갈라진다.
+- Jenkins 설치는 Jenkins 공식 문서 게시판의 "[CI/CD] Jenkins 설치 가이드" 도 참고 (우리는 Docker 로 띄운다 — 아래).
+- 이전에 쓰던 NCP VM(Rocky 8.8) 은 폐기 예정. `setup-server.sh` 는 두 OS 를 모두 지원하므로 필요 시 재사용 가능.
 
 ## 구성
 
 | 파일 | 역할 |
 |---|---|
-| `setup-server.sh` | 서버 초기 세팅: swap 4GB, docker, 방화벽, 백업 cron |
+| `setup-server.sh` | 서버 초기 세팅: swap 4GB, docker, 방화벽(ufw), 백업 cron |
 | `docker-compose.yml` | 앱 스택: nginx(+frontend) · backend · ai · PostgreSQL×2 · Redis |
 | `docker-compose.infra.yml` | CI/CD 스택: Jenkins · gitlab-runner (앱과 수명 주기 분리) |
-| `nginx/nginx.conf` | 단일 진입점 라우팅: `/`→정적파일, `/api`→backend, `/ai`→ai |
+| `nginx/nginx.conf` | 단일 진입점 라우팅: `/`→정적파일, `/api`→backend, `/jenkins`→Jenkins |
 | `docker/*.Dockerfile` | 파트별 이미지 정의 (파트 디렉터리 소유권을 건드리지 않도록 여기 모음) |
 | `scripts/backup-db.sh` | DB 2종 pg_dump 백업 (cron 이 매일 04:00 실행) |
+| `scripts/restore-db.sh` | 백업 파일로 DB 복원 (서버 이전·롤백용) |
 | `.env.example` | 서버 `.env` 템플릿 — 실제 값은 Jenkins Credentials 에 보관 |
 
 ## 서버 첫 구축 순서
 
 ```bash
-# 0. 방화벽(ACG/보안그룹): 22, 80, 443 만 개방 (Jenkins 는 80의 /jenkins 경로 경유). DB 포트(5432·6379)는 절대 열지 않는다.
-#    (NCP ACG 는 실측 결과 22·80·443 만 통과. github.com 이 443 대상 webhook 에
-#     https 를 강제해 Jenkins 는 nginx 80 경유 http://<공인IP>/jenkins/ 로 접근·수신한다)
+# 0. EC2 보안그룹: 22, 80, 443 만 개방 (Jenkins 는 80의 /jenkins 경로 경유). DB 포트(5432·6379)는 절대 열지 않는다.
+#    VM 내부 ufw 는 1번 스크립트가 같은 포트로 맞춘다.
+#    (Jenkins 는 nginx 경유 https://finchapp.org/jenkins/ 로 접근·수신한다.
+#     github.com 이 webhook 대상에 유효한 인증서를 요구하므로 https 가 전제다)
 
 # 1. 서버 세팅 (재로그인 필요 — docker 그룹 적용)
+sudo mkdir -p /srv && sudo chown ubuntu:ubuntu /srv
+git clone <repo> /srv/FINCH
+cd /srv/FINCH
 sudo ./infra/setup-server.sh /srv/FINCH
 
 # 2. 비밀값 배치 (git 에 커밋 금지)
@@ -44,6 +78,100 @@ docker exec -it finch-gitlab-runner gitlab-runner register \
   --docker-volumes /var/run/docker.sock:/var/run/docker.sock
 ```
 
+## NCP → EC2 이전 절차 (데이터 옮기기)
+
+앱은 이미지로 다시 빌드되므로 옮길 것은 **DB 2종 + 비밀값 파일 + Jenkins 설정** 뿐이다.
+
+```bash
+# [NCP] 1. 최신 덤프 생성 → 로컬로 가져오기
+sudo /srv/FINCH/infra/scripts/backup-db.sh
+scp -i <ncp키> <ncp계정>@<ncp공인IP>:/var/backups/finch/*.sql.gz ./
+scp -i <ncp키> <ncp계정>@<ncp공인IP>:/srv/FINCH/infra/{.env,ai.env} ./   # 비밀값
+
+# [EC2] 2. 위 "서버 첫 구축 순서" 0~3 까지 진행 (DB 컨테이너가 healthy 상태여야 한다)
+scp -i finchT.pem backend-*.sql.gz ai-*.sql.gz .env ai.env ubuntu@finchapp.org:/tmp/
+mv /tmp/.env /tmp/ai.env /srv/FINCH/infra/
+
+# [EC2] 3. 복원 (기존 데이터를 지우고 덮어쓴다 — 첫 기동 직후 빈 DB 상태에서 실행)
+cd /srv/FINCH/infra
+docker compose stop backend ai
+sudo ./scripts/restore-db.sh /tmp/backend-<stamp>.sql.gz /tmp/ai-<stamp>.sql.gz
+docker compose start backend ai
+
+# [EC2] 4. CI/CD 스택 기동 후 Jenkins 설정
+#   jenkins_home 백업이 있으면 아래 "백업과 복원" 의 복원 절차를 쓴다 (손으로 재설정할 필요 없음).
+#   백업이 없을 때만 수동 재설정:
+#   - Credentials 3건 재등록: finch-env, finch-ai-env (Secret file), GitLab 접근 토큰
+#   - job: Pipeline from SCM, branch master
+#   - GitLab webhook URL 변경: https://finchapp.org/jenkins/project/<job이름>
+```
+
+이전 완료 후 GitLab webhook 이 새 서버로만 가는지 확인하고 NCP 쪽 Jenkins 는 내려둔다
+(두 서버가 동시에 배포를 받으면 안 된다).
+
+## 백업과 복원
+
+공지상 **서버 사고 시 복구는 지원되지 않고 초기화만 가능**하다. 초기화 후 백업으로 되살리는 경로가 유일한 방어선이므로, 아래 절차는 실제로 돌려본 것만 적는다.
+
+### 무엇을 언제 백업하는가
+
+| 대상 | 스크립트 | cron | 크기 | 보존 |
+|---|---|---|---|---|
+| DB 2종 (`finch_back`, `finch_ai`) | `backup-db.sh` | 매일 04:00 | 각 수 KB | 7일 |
+| `jenkins_home` 볼륨 | `backup-jenkins.sh` | 매일 04:10 | 약 157MB | 7일 |
+
+cron 은 `/etc/cron.d/finch-db-backup`, `/etc/cron.d/finch-jenkins-backup` 에 있고 로그는 `/var/log/finch-backup.log` 로 간다. 저장 위치는 `/var/backups/finch`.
+
+`jenkins_home` 백업은 `workspace`, `caches`, `war` 를 제외한다. 재생성 가능하기 때문이다. 그래도 157MB 인 것은 **`plugins` 가 198MB** 라서인데, 플러그인이 Dockerfile 에 고정돼 있지 않고 UI 로 설치돼 있어 **이 백업이 플러그인의 유일한 사본**이다. 제외하면 복원 시 94개를 손으로 다시 깔아야 하고 버전도 어긋난다.
+
+### DB 복원
+
+```bash
+cd /srv/FINCH/infra
+docker compose stop backend ai          # 앱을 먼저 멈춘다
+sudo ./scripts/restore-db.sh /var/backups/finch/backend-<stamp>.sql.gz \
+                             /var/backups/finch/ai-<stamp>.sql.gz
+docker compose start backend ai
+```
+
+스크립트는 **대상 DB 를 DROP 후 다시 만든다.** 기존 데이터가 사라지므로 대상을 확인하고 실행할 것.
+
+### jenkins_home 복원
+
+```bash
+docker compose -f docker-compose.cicd.yml stop jenkins
+docker run --rm -v finch-infra_jenkins_home:/dest -v /var/backups/finch:/src:ro alpine \
+  sh -c 'rm -rf /dest/* /dest/.[!.]* 2>/dev/null; tar xzf /src/jenkins-home-<stamp>.tar.gz -C /dest'
+docker compose -f docker-compose.cicd.yml start jenkins
+```
+
+job 설정, credentials, 플러그인이 함께 살아난다. `secrets/master.key` 와 `secrets/hudson.util.Secret` 이 백업에 들어 있어 credentials 복호화도 된다 — 이 둘이 빠지면 credentials 는 복구 불가다.
+
+### 실측 (2026-09-04 리허설)
+
+라이브를 건드리지 않고, 덤프를 임시 DB 로 복원하고 백업 tar 로 임시 Jenkins 를 별도 포트에 띄워 확인했다.
+
+| 항목 | 결과 |
+|---|---|
+| backend DB 복원 | 0.3초, 12개 테이블 행 수 원본과 일치 |
+| ai DB 복원 | 0.3초, 16개 테이블 행 수 원본과 일치 |
+| 확장 생존 | `vector 0.8.6`, `pg_trgm 1.6` 복원 후 유지 |
+| jenkins_home 압축 해제 | 2초 (205MB) |
+| 임시 Jenkins 기동 | 12초, job `finch-deploy` 적재, 플러그인 94개, credentials 3건 |
+| 기동 중 SEVERE, 복호화 실패 | 0건 |
+| **총 소요** | **DB 1초 미만 + Jenkins 16초** |
+
+**주의: 현재 DB 에 데이터가 거의 없다** (`users` 2행). 위 0.3초는 지금 데이터량 기준이고, 시연 데이터가 쌓이면 달라진다. 데이터가 들어온 뒤 한 번 더 재야 한다.
+
+credentials 는 기동 시점에 복호화 오류가 없다는 것까지 확인했다. Jenkins 는 실제 사용 시점에 복호화하므로 완전한 증명은 빌드 실행인데, 그러면 운영에 배포되므로 리허설에서는 하지 않았다.
+
+### 리허설 다시 돌리는 법
+
+운영에 영향을 주지 않는 방식이다. 인프라 변경 전마다 한 번씩 돌린다.
+
+- **DB**: 원본 DB 이름 뒤에 `_restoretest` 를 붙인 임시 DB 를 만들어 덤프를 붓고, `information_schema.tables` 기준으로 테이블별 `count(*)` 를 원본과 대조한 뒤 임시 DB 를 지운다.
+- **Jenkins**: tar 를 `/tmp` 에 풀고 `--user root` 로 `127.0.0.1:18080` 에 임시 컨테이너를 띄운다. 인증 없는 `/api/json` 이 **403** 이면 보안 설정이 복원된 것이고, 200 이면서 셋업 마법사가 뜨면 실패다.
+
 ## 배포 (루트 `Jenkinsfile` 이 수행)
 
 master 머지 webhook → Jenkins 가 자기 워크스페이스에서:
@@ -59,10 +187,132 @@ compose 프로젝트 이름을 `finch` 로 고정했으므로, 수동 기동(위
 Jenkins job 설정(최초 1회)과 Credentials 목록은 `Jenkinsfile` 상단 주석 참고.
 수동 전체 배포가 필요하면 job 의 `FORCE_ALL` 파라미터를 켜고 실행한다.
 
+## HTTPS 와 인증서
+
+발급처는 Let's Encrypt, 대상은 `finchapp.org` 한 건이다.
+
+**발급과 갱신의 방식이 다르다.** 최초 발급은 nginx 가 없던 시점이라 `standalone`
+(certbot 이 직접 80 을 점유해 검증) 으로 했다. 갱신까지 standalone 으로 두면 갱신할 때마다
+nginx 를 내려야 해서 서비스가 끊긴다. 그래서 갱신은 `webroot` 로 한다 — nginx 가 뜬 채로
+`/.well-known/acme-challenge/` 만 서빙하면 되므로 무중단이다.
+
+- 인증서: `/etc/letsencrypt/live/finchapp.org/` (호스트). nginx 컨테이너에 읽기 전용 마운트
+- 챌린지 경로: `/var/www/certbot` (호스트). certbot 이 쓰고 nginx 가 읽는다
+- 갱신: `infra/scripts/renew-cert.sh`, 매일 04:20 cron. 만료가 임박하지 않으면 아무것도 하지 않는다
+- 로그: `/var/log/finch-cert.log`
+
+수동 확인:
+
+```bash
+sudo openssl x509 -in /etc/letsencrypt/live/finchapp.org/fullchain.pem -noout -dates
+sudo /home/ubuntu/FINCH/infra/scripts/renew-cert.sh
+```
+
+**nginx.conf 를 고칠 때 주의.** 80 의 `/.well-known/acme-challenge/` location 을 지우거나
+`location /` 리다이렉트 뒤로 옮기면 갱신이 조용히 실패한다. 인증서가 만료되기 전까지
+증상이 나타나지 않으므로 발견이 늦는다.
+
+**배포 전 검증.** 인증서 경로가 틀리면 nginx 가 기동 자체에 실패해 사이트 전체가 죽는다.
+설정을 바꾸면 반드시 실제 인증서를 마운트한 채 문법 검사를 돌린다.
+
+```bash
+docker run --rm \n  -v $PWD/infra/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro \n  -v /etc/letsencrypt:/etc/letsencrypt:ro \n  nginx:1.27-alpine nginx -t
+```
+
+## 관측 스택 (Prometheus, Grafana, Loki, Alloy)
+
+`docker-compose.observability.yml`. 앱과 CI 스택에서 분리해 띄운다 — 앱을 재배포해도 지표 이력이 남는다.
+
+```bash
+cd infra
+docker compose -f docker-compose.observability.yml up -d
+```
+
+### 왜 지표와 로그를 둘 다 두는가
+
+지표는 "언제 이상한가"에 답하고 로그는 "왜 그런가"에 답한다. 둘은 대체재가 아니다.
+지연이 튀는 것은 지표에서만 보이고, 그 순간 무슨 예외가 났는지는 로그에만 있다.
+장애 대응은 지표에서 시각을 찾고 로그에서 원인을 찾는 순서로 흐른다.
+
+### 구성
+
+| 컨테이너 | 역할 | 접근 |
+|---|---|---|
+| `finch-prometheus` | 지표 수집과 저장 (15일, 4GB 상한) | `127.0.0.1:9090` |
+| `finch-grafana` | 지표와 로그 조회 | `127.0.0.1:3000` |
+| `finch-loki` | 로그 저장 (7일) | 내부 전용 |
+| `finch-alloy` | 컨테이너 stdout 수집 → Loki | 내부 전용 |
+| `finch-node-exporter` | 호스트 CPU, 메모리, 디스크 | 내부 전용 |
+
+**외부에 포트를 열지 않는다.** Grafana 와 Prometheus 는 `127.0.0.1` 에만 바인딩한다.
+커널이 외부 인터페이스에 소켓을 붙이지 않으므로 ufw 규칙과 무관하게 외부에서 닿지 않는다.
+보는 방법은 SSH 터널이다.
+
+```bash
+ssh -i finchT.pem -L 3000:127.0.0.1:3000 ubuntu@finchapp.org
+# 브라우저에서 http://localhost:3000
+```
+
+nginx 로 `/grafana` 를 열지 않은 이유는 공개 로그인 화면을 하나 더 늘리지 않기 위해서다.
+팀 전원이 이미 서버 pem 을 갖고 있어 터널로 충분하다. 공개가 필요해지면 그때 논의한다.
+
+### 앱 코드를 고치지 않는다
+
+Alloy 는 도커 API 로 컨테이너 목록을 가져와 각 컨테이너의 stdout 을 읽는다.
+애플리케이션은 평소대로 표준 출력에 찍기만 하면 되고, 로깅 라이브러리나 파일 경로를 맞출 필요가 없다.
+새 컨테이너가 뜨면 자동으로 수집 대상이 되므로 배포마다 설정을 고칠 일도 없다.
+
+k3s 로 옮겨도 같은 원리가 유지된다. 컨테이너 런타임의 로그 규약(stdout → 런타임 로그 파일)이
+같기 때문에, 오케스트레이터가 바뀌어도 수집 방식은 그대로다.
+
+### 조회 축
+
+Loki 는 로그 본문을 색인하지 않고 **라벨만** 색인한다. 그래서 먼저 라벨로 좁힌 뒤 본문을 훑는다.
+
+| 라벨 | 값 예 | 출처 |
+|---|---|---|
+| `container` | `finch-backend` | 도커 컨테이너 이름 |
+| `service` | `backend` | compose 서비스명 (컨테이너를 다시 만들어도 유지) |
+| `stack` | `finch`, `finch-infra` | compose 프로젝트명 |
+
+```logql
+{service="backend"}                          # 백엔드 로그
+{stack="finch"} |= "ERROR"                     # 앱 스택 전체에서 ERROR
+{job="docker"} |= "3fa85f64-5717-4562"        # 요청 ID 로 backend 와 ai 교차 조회
+```
+
+마지막 것이 중요하다. 분산 추적(Jaeger 등)을 도입하지 않기로 한 대신,
+`X-Request-Id` 로 서비스 간 로그를 잇는다. 홉이 최대 3단계라 이 방법으로 충분하다.
+
+### 지금 없는 것
+
+- **AI 애플리케이션 지표** — FastAPI 가 `/metrics` 를 노출하지 않는다(실측 404).
+  계측 추가는 `ai/` 소유인 AI 파트에 요청해야 한다 (ADR-0002).
+- **컨테이너별 자원 지표** — cAdvisor 를 넣으려 했으나 이 서버의 Docker 스토리지 드라이버가
+  `overlayfs`(Docker 25+ 의 새 이름)라 cAdvisor v0.49~v0.52 가 컨테이너를 식별하지 못한다.
+  `FINCH-59`(리소스 실측) 때는 `docker stats` 로 직접 재고,
+  `FINCH-39`(k3s 전환) 후에는 kubelet 이 같은 지표를 내장 노출하므로 그때 job 을 추가한다.
+
+### 설정을 고칠 때
+
+배포 전에 각 도구로 검증한다. 잘못된 설정은 컨테이너가 조용히 재시작 루프에 빠지는 형태로 나타난다.
+
+```bash
+cd infra/observability
+docker run --rm --entrypoint promtool -v $PWD/prometheus.yml:/p.yml prom/prometheus:v3.1.0 check config /p.yml
+docker run --rm -v $PWD/loki-config.yml:/c.yml grafana/loki:3.3.2 -config.file=/c.yml -verify-config
+docker run --rm -v $PWD/alloy-config.alloy:/c.alloy grafana/alloy:v1.5.1 fmt /c.alloy
+```
+
+`GRAFANA_ADMIN_PASSWORD` 가 비어 있으면 Grafana 는 기동을 거부한다.
+설정을 빠뜨린 배포가 `admin/admin` 으로 뜨는 것을 막기 위한 의도적 설계다.
+
 ## 남은 작업 (초안 상태)
 
 - [ ] `docker/backend.Dockerfile` — backend 파트가 `build.gradle`·`gradlew` 커밋 후 동작. Java 버전 확인
 - [ ] nginx `/api` 프리픽스 전달 방식 — backend 컨트롤러 매핑이 정해지면 확정
 - [ ] 루트 `.gitlab-ci.yml` 에 `include: - local: ai/.gitlab-ci.yml` 추가 (팀 결정, ADR-0002)
-- [ ] Jenkins job 생성: Pipeline from SCM + GitLab webhook 연결 + Credentials 2건 등록
-- [ ] EC2 전환 시: 이 README 순서 그대로 재실행 + webhook URL 변경 + 도메인/HTTPS(certbot)
+- [ ] Jenkins job 생성: Pipeline from SCM + GitLab webhook 연결 + Credentials 2건 등록 (FINCH-115)
+- [x] HTTPS 적용: 443 종단, 80 → 443 리다이렉트, webroot 갱신 cron (2026-09-01, FINCH-114)
+- [x] 관측 스택: Prometheus, Grafana, Loki, Alloy 와 기본 대시보드 (2026-09-01, FINCH-52, -116)
+- [x] EC2 전환: `setup-server.sh` Ubuntu/ufw 대응, 접속 정보·이전 절차 문서화 (2026-08-31)

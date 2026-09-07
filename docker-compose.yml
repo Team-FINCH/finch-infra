@@ -5,18 +5,41 @@
 # 포트는 nginx 80 하나만 호스트에 연다. DB·앱 포트는 Docker 내부 네트워크 전용.
 name: finch
 
+# 컨테이너 로그 상한. 기본(json-file)은 무제한이라 장기 운영 시 디스크를 먹는다.
+# 서비스마다 logging: *default-logging 으로 참조한다.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# 메모리 상한: 한 컨테이너의 폭주가 이웃을 죽이지 못하게 하는 격리 장치.
+# 값은 서버 스펙 미확정 상태의 보수적 초기값이며, 실측 후 조정한다 (Jira FINCH-59).
 services:
   nginx:
     build:
       context: ..
       dockerfile: infra/docker/frontend.Dockerfile
+      # 프런트를 빌드하는 것이 nginx 이미지라 build arg 가 여기 붙는다.
+      # REST API 키는 공개 client_id 라 번들에 실려도 되는 값이다.
+      args:
+        VITE_KAKAO_REST_API_KEY: ${KAKAO_CLIENT_ID:?KAKAO_CLIENT_ID 가 필요합니다}
     image: finch/nginx:latest
     container_name: finch-nginx
+    mem_limit: 256m
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+      # 인증서는 호스트의 certbot 이 관리한다. 컨테이너는 읽기만 한다.
+      # 이 마운트가 없으면 nginx 가 ssl_certificate 를 못 찾아 기동 자체에 실패한다.
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      # ACME 챌린지 파일은 certbot 이 호스트에 쓰고 nginx 가 80 으로 서빙한다.
+      - /var/www/certbot:/var/www/certbot:ro
     depends_on:
       - backend
       - ai
+    logging: *default-logging
     restart: unless-stopped
 
   backend:
@@ -25,21 +48,39 @@ services:
       dockerfile: infra/docker/backend.Dockerfile
     image: finch/backend:latest
     container_name: finch-backend
+    mem_limit: 1536m
     # backend/src/main/resources/application.yaml 이 정의한 환경변수 계약을 따른다
     environment:
       TZ: ${TZ:-Asia/Seoul}
       POSTGRES_HOST: postgres-backend
       POSTGRES_PORT: "5432"
-      POSTGRES_DB: ${BACKEND_DB_NAME}
-      POSTGRES_USER: ${BACKEND_DB_USER}
-      POSTGRES_PASSWORD: ${BACKEND_DB_PASSWORD}
+      POSTGRES_DB: ${BACKEND_DB_NAME:?BACKEND_DB_NAME 가 필요합니다}
+      POSTGRES_USER: ${BACKEND_DB_USER:?BACKEND_DB_USER 가 필요합니다}
+      POSTGRES_PASSWORD: ${BACKEND_DB_PASSWORD:?BACKEND_DB_PASSWORD 가 필요합니다}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      # compose 는 미정의 변수를 빈 문자열로 넘긴다. 그러면 application.yaml 이 기본값을
+      # 두지 않은 의도가 무너지고 빈 서명 키로 조용히 기동한다 — :? 로 여기서 차단한다.
+      JWT_SECRET: ${BACKEND_JWT_SECRET:?BACKEND_JWT_SECRET 가 필요합니다}
+      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID:?KAKAO_CLIENT_ID 가 필요합니다}
+      # 콘솔에서 Client Secret 을 켜지 않은 앱은 값이 없다. 빈 문자열이면
+      # 토큰 교환 폼에서 client_secret 파라미터가 빠진다 (KakaoOAuthClient.tokenForm)
+      KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET:-}
     depends_on:
       postgres-backend:
         condition: service_healthy
       redis:
         condition: service_started
+    # 컨테이너가 뜨는 것과 살아 있는 것은 다르다. healthcheck 가 있어야
+    # compose ps 에 healthy 가 표시되고, up -d --wait 와 배포 스모크 테스트가 성립한다.
+    # start_period: Spring 기동이 느려 초기 실패를 unhealthy 로 치지 않는 유예.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 60s
+    logging: *default-logging
     restart: unless-stopped
 
   ai:
@@ -48,6 +89,7 @@ services:
       dockerfile: infra/docker/ai.Dockerfile
     image: finch/ai:latest
     container_name: finch-ai
+    mem_limit: 1024m
     # 외부 API 키 등은 서버에만 두는 infra/ai.env 에서 읽는다 (ai/.env.example 참고).
     # required: false — 키 준비 전에도 뼈대 기동이 가능하게 한다 (없으면 경고만).
     env_file:
@@ -56,21 +98,35 @@ services:
     # env_file 값보다 environment 가 우선한다 — 컨테이너 네트워크 기준 주소로 덮어쓴다.
     environment:
       TZ: ${TZ:-Asia/Seoul}
-      DATABASE_URL: postgresql+asyncpg://${AI_DB_USER}:${AI_DB_PASSWORD}@postgres-ai:5432/${AI_DB_NAME}
+      DATABASE_URL: postgresql+asyncpg://${AI_DB_USER:?AI_DB_USER 가 필요합니다}:${AI_DB_PASSWORD:?AI_DB_PASSWORD 가 필요합니다}@postgres-ai:5432/${AI_DB_NAME:?AI_DB_NAME 가 필요합니다}
       BACKEND_BASE_URL: http://backend:8080
+      # 서버에서는 항상 운영 모드로 고정한다. APP_ENV 기본값이 local 이라, ai.env 가 없으면
+      # (required: false 라 조용히 지나간다) 내부 토큰 검증이 통째로 꺼진 채 뜨기 때문이다
+      # (ai/app/api/deps.py — local 에서만 빈 토큰 통과). 여기 명시하면 ai.env 부재 시에도
+      # 인증이 fail-closed 로 닫힌다.
+      APP_ENV: prod
     depends_on:
       postgres-ai:
         condition: service_healthy
+    # 이미지에 curl 이 없어 파이썬 표준 라이브러리로 확인한다 (앱의 /health — ai/app/api/main.py)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging
     restart: unless-stopped
 
   postgres-backend:
     image: postgres:17
     container_name: finch-postgres-backend
+    mem_limit: 1024m
     environment:
       TZ: ${TZ:-Asia/Seoul}
-      POSTGRES_USER: ${BACKEND_DB_USER}
-      POSTGRES_PASSWORD: ${BACKEND_DB_PASSWORD}
-      POSTGRES_DB: ${BACKEND_DB_NAME}
+      POSTGRES_USER: ${BACKEND_DB_USER:?BACKEND_DB_USER 가 필요합니다}
+      POSTGRES_PASSWORD: ${BACKEND_DB_PASSWORD:?BACKEND_DB_PASSWORD 가 필요합니다}
+      POSTGRES_DB: ${BACKEND_DB_NAME:?BACKEND_DB_NAME 가 필요합니다}
     volumes:
       - pg_backend_data:/var/lib/postgresql/data
     healthcheck:
@@ -78,11 +134,14 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
+    logging: *default-logging
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     container_name: finch-redis
+    mem_limit: 256m
+    logging: *default-logging
     restart: unless-stopped
 
   # ai 파트 전용 DB. ai/compose.yaml(로컬 개발용)과 같은 이미지·계정 구성.
@@ -90,11 +149,12 @@ services:
   postgres-ai:
     image: pgvector/pgvector:pg17
     container_name: finch-postgres-ai
+    mem_limit: 1024m
     environment:
       TZ: ${TZ:-Asia/Seoul}
-      POSTGRES_USER: ${AI_DB_USER}
-      POSTGRES_PASSWORD: ${AI_DB_PASSWORD}
-      POSTGRES_DB: ${AI_DB_NAME}
+      POSTGRES_USER: ${AI_DB_USER:?AI_DB_USER 가 필요합니다}
+      POSTGRES_PASSWORD: ${AI_DB_PASSWORD:?AI_DB_PASSWORD 가 필요합니다}
+      POSTGRES_DB: ${AI_DB_NAME:?AI_DB_NAME 가 필요합니다}
     volumes:
       - pg_ai_data:/var/lib/postgresql/data
     healthcheck:
@@ -102,6 +162,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
+    logging: *default-logging
     restart: unless-stopped
 
 volumes:

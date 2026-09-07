@@ -1,0 +1,51 @@
+# Prometheus scrape 설정.
+# Prometheus 는 대상이 밀어주는 것을 받는 게 아니라 주기적으로 긁어 간다(pull).
+# 그래서 대상 목록이 여기 있고, 대상은 자기가 감시당하는지 모른다.
+
+global:
+  # 15초. 더 짧게 하면 저장량이 비례해서 늘고, 더 길면 부하 테스트 중
+  # 짧은 스파이크를 놓친다 (FINCH-58·62 가 이 해상도에 의존한다).
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    env: prod
+    project: finch
+
+scrape_configs:
+  # Prometheus 자신. 수집기가 죽으면 다른 모든 지표가 함께 사라지므로 먼저 본다.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Spring Boot — micrometer 가 /actuator/prometheus 로 노출한다.
+  # 컨테이너 이름으로 부른다. nginx 경유(/api)로 가면 actuator 가 루트에 있어 404 가 난다
+  # (FINCH-111 에서 스모크 테스트가 같은 이유로 실패했다).
+  - job_name: backend
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["finch-backend:8080"]
+        labels:
+          service: backend
+
+  # 호스트 자원 (CPU·메모리·디스크·파일시스템).
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  # Loki 자체 상태. 로그 수집이 멈춘 것을 로그로 알 수는 없다 —
+  # 수집기의 고장은 지표로 봐야 한다.
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+
+# ── 아직 없는 대상 ────────────────────────────────────────
+# 1. ai(FastAPI)는 /metrics 를 노출하지 않는다 (2026-09-01 실측: 404).
+#    계측을 넣으려면 ai 파트 코드(prometheus-fastapi-instrumentator 등)를 고쳐야 하는데,
+#    ADR-0002 상 ai/ 는 AI 파트 소유라 인프라가 임의로 건드리지 않는다. 요청 후 추가한다.
+#
+# 2. 컨테이너별 자원 지표(cAdvisor)가 없다. 이 서버의 Docker 스토리지 드라이버가
+#    overlayfs 라 cAdvisor 가 컨테이너를 식별하지 못한다 (docker-compose.observability.yml 주석 참고).
+#    k3s 전환(FINCH-39) 후 kubelet 이 같은 지표를 내장 노출하므로 그때 job 을 추가한다.
+#
+# 대상을 추가할 때는 promtool 로 먼저 검증한다:
+#   docker run --rm --entrypoint promtool -v $PWD/prometheus.yml:/p.yml prom/prometheus:v3.1.0 check config /p.yml
