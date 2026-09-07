@@ -5,8 +5,10 @@
 //   - GitLab plugin 설치 후 webhook 연결: https://finchapp.org/jenkins/project/<job이름>
 //     (nginx 443 종단 경유. GitLab webhook 은 리다이렉트를 따라가지 않으므로 https 로 등록해야 한다)
 //   - Credentials 등록 (결정: 비밀값은 Jenkins Credentials 에 보관, 배포 시점에 주입)
-//       finch-env     (Secret file) : infra/.env.example 을 채운 파일
-//       finch-ai-env  (Secret file) : ai/.env.example 을 채운 파일
+//       finch-env             (Secret file) : infra/.env.example 을 채운 파일
+//       finch-ai-env          (Secret file) : ai/.env.example 을 채운 파일
+//       finch-notify-webhook  (Secret text) : 배포 알림 webhook URL. 없으면 알림만 건너뛴다
+//     알림 채널 형식은 아래 NOTIFY_KIND 로 고른다 (mattermost | discord)
 pipeline {
     agent any
 
@@ -22,6 +24,7 @@ pipeline {
 
     environment {
         COMPOSE = 'docker compose -f infra/docker-compose.yml --env-file infra/.env'
+        NOTIFY_KIND = 'mattermost'
     }
 
     stages {
@@ -117,7 +120,37 @@ pipeline {
         }
         failure {
             echo '배포 실패 — docker compose logs <서비스> 로 원인을 확인할 것'
-            // TODO: Mattermost/Discord webhook 알림 연동
+            script { notifyDeploy('실패', '배포가 실패했다. 서버는 이전 상태로 남아 있다.') }
         }
+        fixed {
+            script { notifyDeploy('복구', '이전 실패 이후 배포가 다시 성공했다.') }
+        }
+    }
+}
+
+// 알림 전송은 배포 결과를 바꾸지 않는다. webhook 이 없거나 실패해도 빌드 판정은 그대로 둔다.
+def notifyDeploy(String state, String detail) {
+    def services = env.SERVICES ?: '없음'
+    def branch = env.GIT_BRANCH ?: 'master'
+    def msg = "[Finch 배포 ${state}] ${env.JOB_NAME} #${env.BUILD_NUMBER}" +
+              "\\n브랜치: ${branch} / 대상: ${services}" +
+              "\\n${detail}" +
+              "\\n${env.BUILD_URL}console"
+    def field = (env.NOTIFY_KIND == 'discord') ? 'content' : 'text'
+
+    try {
+        withCredentials([string(credentialsId: 'finch-notify-webhook', variable: 'NOTIFY_HOOK')]) {
+            writeFile file: '.notify.json', text: "{\"${field}\":\"${msg}\"}"
+            def rc = sh(returnStatus: true, script:
+                'curl -fsS -m 10 -X POST -H "Content-Type: application/json" ' +
+                '--data @.notify.json "$NOTIFY_HOOK" -o /dev/null')
+            if (rc != 0) {
+                echo "알림 전송 실패 (curl exit ${rc}) — 배포 판정에는 영향 없음"
+            }
+        }
+    } catch (err) {
+        echo "알림 건너뜀: ${err.message}"
+    } finally {
+        sh 'rm -f .notify.json'
     }
 }
