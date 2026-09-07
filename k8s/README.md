@@ -31,14 +31,52 @@ Docker 는 어차피 없앨 수 없다. 이미지 빌드, gitlab-runner 의 dock
 
 근거 상세는 `Finch-인프라-QnA.md` §3, §5.
 
-### 이미지 GC 임계값을 85/80 으로 올린 이유
+### 이미지 GC 임계값을 85/80 으로 올린 이유 (2026-09-07 실측)
 
-레지스트리가 없다. kubelet 의 이미지 GC 가 도는 대상은 `--docker` 에서는 **Docker 의 이미지
-저장소**이므로, 회수 대상에 `finch/*` 뿐 아니라 Jenkins 와 Testcontainers 가 쓰는 베이스
-이미지까지 들어간다. 지워지면 다시 받아올 곳이 없거나 빌드를 다시 돌려야 한다.
+레지스트리가 없다. `--docker` 에서 kubelet 의 이미지 GC 가 도는 대상은 **Docker 의 이미지
+저장소 그 자체**다. 추정이 아니라 확인했다 — `crictl images` 와 `docker images` 가 같은 29개를
+반환한다. 별도의 k8s 전용 저장소가 없다.
 
-디스크는 309G 중 9% 사용이라 85% 는 사실상 닿지 않는다. 안전판은 남기되 오작동 여지를 줄인 값이다.
-**GC 가 실제로 무엇을 지우는지는 아직 실측하지 않았다.**
+따라서 GC 회수 대상에는 `finch/*` 네 개뿐 아니라 Compose 스택과 CI 가 의존하는 것이 전부 들어간다.
+
+    finch/backend, finch/ai, finch/nginx, finch/jenkins
+    eclipse-temurin:21-jdk, gitlab/gitlab-runner, gitlab-runner-helper,
+    testcontainers/ryuk, pgvector/pgvector:pg17, postgres:17, redis:7-alpine ...
+
+`finch/*` 는 Jenkins 재빌드로 복구되지만, GC 가 CI 가 쓰는 helper 와 ryuk 이미지를 지우면
+**파이프라인이 조용히 깨진다.** 디스크는 309G 중 9%(26G) 사용이라 85% 는 사실상 닿지 않는
+값이고(약 262G 에서 발동), `imageMinimumGCAge` 기본값 2분도 함께 걸린다. 안전판은 남기되
+오작동 여지를 줄인 값이다.
+
+적용 확인은 kubelet configz 로 한다.
+
+```bash
+NODE=$(kubectl get node -o jsonpath='{.items[0].metadata.name}')
+kubectl get --raw "/api/v1/nodes/$NODE/proxy/configz" | tr ',' '
+' | grep imageGC
+# "imageGCHighThresholdPercent":85
+# "imageGCLowThresholdPercent":80
+```
+
+`ps` 로는 확인되지 않는다. k3s 는 kubelet 을 별도 프로세스가 아니라 `k3s server` 안에서
+돌리므로 명령줄에 `--image-gc-*` 가 그대로 보이지 않는다.
+
+## 설치 실측 (2026-09-07, FINCH-39)
+
+| 항목 | 값 |
+|---|---|
+| k3s 버전 | v1.36.4+k3s1 |
+| 런타임 | `docker://29.7.2` (cri-dockerd) |
+| 메모리 오버헤드 | **약 500~590MB** (`free` 기준 2.9Gi → 3.4Gi, `k3s.service` MemoryCurrent 589MB). 예상치 800MB 아래 |
+| iptables 규칙 | filter 146 → 233, nat 24 → 73 |
+| 기존 서비스 | 영향 없음. `https://finchapp.org/` 200, finch 컨테이너 13개 유지 |
+| 로컬 이미지 참조 | `finch/backend:latest` 파드가 반입 단계 없이 기동 확인 |
+
+시스템 파드(coredns, local-path-provisioner, metrics-server)는 기동 직후 readiness probe
+실패로 각 1회 재시작한 뒤 안정화됐다. 기동 순서 문제로 보이며 이후 재발하지 않았다.
+
+설치는 CI 유휴 상태를 확인하고 실행했다. k3s 가 iptables 를 다시 쓰므로 gitlab-runner 빌드나
+Testcontainers 가 도는 중에 설치하면 남의 파이프라인이 중간에 깨질 수 있다.
 
 ## 소유권 분리 (인프라 명세 v0.5 §5.4)
 
