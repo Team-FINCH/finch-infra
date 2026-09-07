@@ -66,6 +66,8 @@ services:
       # 콘솔에서 Client Secret 을 켜지 않은 앱은 값이 없다. 빈 문자열이면
       # 토큰 교환 폼에서 client_secret 파라미터가 빠진다 (KakaoOAuthClient.tokenForm)
       KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET:-}
+      FINCH_PUBLIC_BASE_URL: ${FINCH_PUBLIC_BASE_URL:-https://finchapp.org}
+      FINCH_FRONT_BASE_URL: ${FINCH_FRONT_BASE_URL:-https://finchapp.org}
     depends_on:
       postgres-backend:
         condition: service_healthy
