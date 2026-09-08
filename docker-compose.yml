@@ -39,6 +39,12 @@ services:
     depends_on:
       - backend
       - ai
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-k", "-o", "/dev/null", "https://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     logging: *default-logging
     restart: unless-stopped
 
@@ -79,7 +85,7 @@ services:
       postgres-backend:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     # 컨테이너가 뜨는 것과 살아 있는 것은 다르다. healthcheck 가 있어야
     # compose ps 에 healthy 가 표시되고, up -d --wait 와 배포 스모크 테스트가 성립한다.
     # start_period: Spring 기동이 느려 초기 실패를 unhealthy 로 치지 않는 유예.
@@ -150,6 +156,11 @@ services:
     image: redis:7-alpine
     container_name: finch-redis
     mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     logging: *default-logging
     restart: unless-stopped
 
