@@ -187,6 +187,86 @@ compose 프로젝트 이름을 `finch` 로 고정했으므로, 수동 기동(위
 Jenkins job 설정(최초 1회)과 Credentials 목록은 `Jenkinsfile` 상단 주석 참고.
 수동 전체 배포가 필요하면 job 의 `FORCE_ALL` 파라미터를 켜고 실행한다.
 
+## healthcheck
+
+배포는 `docker compose up -d --wait` 로 한다. `--wait` 는 **healthcheck 가 있는 서비스는
+healthy 를, 없는 서비스는 started 만** 기다린다. 즉 healthcheck 가 없으면 뜨자마자 죽는
+배포도 성공으로 기록된다.
+
+| 서비스 | 판정 | 명령 |
+|---|---|---|
+| backend | healthy | `curl -fsS http://localhost:8080/actuator/health` |
+| ai | healthy | `python -c "urllib.request.urlopen('http://localhost:8000/health')"` |
+| postgres-backend, postgres-ai | healthy | `pg_isready` |
+| nginx | healthy | `curl -fsS -k -o /dev/null https://127.0.0.1/` |
+| redis | healthy | `redis-cli ping` |
+| jenkins, gitlab-runner, 관측 5종 | 없음 | 사용자 요청 경로가 아니고 배포 판정에 관여하지 않는다 |
+
+`backend` 는 `postgres-backend` 와 `redis` 를 `condition: service_healthy` 로 기다린다.
+**떴다는 것과 접속을 받는다는 것은 다르다.**
+
+### healthcheck 에 `localhost` 를 쓰면 안 되는 경우가 있다
+
+nginx 는 IPv4 만 듣는다 (`listen 80;`, `listen 443 ssl;`). 컨테이너의 `/etc/hosts` 는
+`localhost` 를 `127.0.0.1` 과 `::1` 양쪽에 매핑하므로, 클라이언트가 `::1` 을 먼저 고르면
+연결이 거부된다.
+
+```
+docker exec finch-nginx wget -O /dev/null http://localhost/
+  → wget: can't connect to remote host: Connection refused
+
+http://127.0.0.1/  301        https://127.0.0.1/ (-k)  200
+http://localhost/  301        http://[::1]/            000
+```
+
+`curl` 은 IPv4 로 폴백해서 되고 `wget` 은 실패한다. **도구에 따라 결과가 갈리므로 주소를
+명시한다.** nginx healthcheck 가 `127.0.0.1` 을 쓰는 이유다.
+
+`https` 로 확인하는 이유는 신호가 더 강하기 때문이다 — 인증서 로드와 정적 파일 존재까지
+함께 검증된다. `-k` 는 루프백 자기 점검이라 인증서 검증을 건너뛴다.
+
+## 응답 헤더
+
+`infra/nginx/nginx.conf` 가 내려보내는 헤더다. 실측은 `curl -D - https://finchapp.org/` 로 한다.
+
+| 헤더 | 값 | 이유 |
+|---|---|---|
+| `Strict-Transport-Security` | `max-age=2592000` | HTTPS 종단이 nginx 다. 이후 접속을 https 로 고정한다 |
+| `X-Content-Type-Options` | `nosniff` | 브라우저가 Content-Type 을 추측해 실행하는 것을 막는다 |
+| `X-Frame-Options` | `SAMEORIGIN` | 외부 페이지가 우리 화면을 iframe 으로 감싸는 클릭재킹을 막는다 |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | 외부로 나갈 때 경로와 쿼리를 흘리지 않는다 |
+
+`server_tokens off` 은 `http` 레벨(파일 최상단)에 둔다. 그래야 80 과 443 양쪽에 적용된다.
+없으면 `server: nginx/1.27.5` 로 버전이 나가고, 버전 문자열은 알려진 취약점을 골라
+시도하는 데 쓰인다.
+
+`/jenkins/` 프록시는 `proxy_hide_header` 로 `X-Jenkins`, `X-Hudson` 계열을 지운다.
+Jenkins 가 자기 버전을 헤더로 알리는데 프록시가 그대로 통과시키기 때문이다.
+
+### `add_header` 는 상속되지 않는 조건이 있다
+
+**location 블록이 자기 `add_header` 를 하나라도 가지면, 상위 레벨의 `add_header` 를 전혀
+물려받지 않는다.** 일부가 아니라 전부다.
+
+그래서 `location /assets/` 에 보안 헤더 네 줄이 `server` 레벨과 중복으로 적혀 있다. 지우면
+정적 파일 응답에서만 보안 헤더가 사라진다 — **JS 번들에 `nosniff` 가 빠지는 것이 특히 나쁘다.**
+
+`always` 를 붙이는 이유는 별개다. 이것이 없으면 2xx·3xx 응답에만 헤더가 붙고 4xx·5xx 에는
+빠진다. 에러 응답에도 필요하다.
+
+### HSTS 기간을 30일로 둔 이유
+
+관례는 1년(`31536000`)이다. 짧게 잡은 것은 의도다.
+
+HSTS 는 브라우저가 기억하는 값이라, 인증서 갱신이 실패하면 **사용자가 경고를 무시하고
+들어갈 수단이 없다.** 기간이 곧 사고 시 복구 불가 기간이다. 이 프로젝트는 수 주 뒤 끝나므로
+1년을 걸어 얻을 것이 없다. 갱신 자동화가 오래 검증된 뒤에 늘린다.
+
+### 넣지 않은 것
+
+`Content-Security-Policy` 는 넣지 않았다. 잘못 쓰면 화면이 조용히 깨지고, 카카오 인가
+리다이렉트와 인라인 스타일까지 확인해야 정확한 값이 나온다. 별건으로 다룬다.
+
 ## 환경변수 계약 검사
 
 `infra/scripts/check-env-contract.py` 가 `backend/src/main/resources/application.yaml` 의
