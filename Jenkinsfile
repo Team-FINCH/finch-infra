@@ -5,8 +5,11 @@
 //   - GitLab plugin 설치 후 webhook 연결: https://finchapp.org/jenkins/project/<job이름>
 //     (nginx 443 종단 경유. GitLab webhook 은 리다이렉트를 따라가지 않으므로 https 로 등록해야 한다)
 //   - Credentials 등록 (결정: 비밀값은 Jenkins Credentials 에 보관, 배포 시점에 주입)
-//       finch-env     (Secret file) : infra/.env.example 을 채운 파일
-//       finch-ai-env  (Secret file) : ai/.env.example 을 채운 파일
+//       finch-env             (Secret file) : infra/.env.example 을 채운 파일
+//       finch-ai-env          (Secret file) : ai/.env.example 을 채운 파일
+//       finch-kakaopay-secret (Secret text) : 카카오페이 Secret Key. 아래 '비밀값 주입' 이
+//         infra/.env 에 한 줄로 덧붙인다. Secret file 은 내용을 다시 볼 수 없어 한 줄 추가에도
+//         파일 전체 교체가 필요하므로, 나중에 추가된 값은 Secret text 로 분리한다 (FINCH-159)
 pipeline {
     agent any
 
@@ -70,8 +73,16 @@ pipeline {
                 withCredentials([
                     file(credentialsId: 'finch-env',    variable: 'ENV_FILE'),
                     file(credentialsId: 'finch-ai-env', variable: 'AI_ENV_FILE'),
+                    string(credentialsId: 'finch-kakaopay-secret', variable: 'KAKAOPAY_SECRET'),
                 ]) {
-                    sh 'cp "$ENV_FILE" infra/.env && cp "$AI_ENV_FILE" infra/ai.env'
+                    // set +x: Jenkins 의 sh 는 기본이 -x 라 확장된 명령이 콘솔에 찍힌다.
+                    // 앞줄 개행을 붙이는 이유는 Secret file 이 개행으로 끝나지 않을 수 있어서다.
+                    sh '''
+                        set +x
+                        cp "$ENV_FILE" infra/.env
+                        cp "$AI_ENV_FILE" infra/ai.env
+                        printf '\\nKAKAOPAY_SECRET_KEY=%s\\n' "$KAKAOPAY_SECRET" >> infra/.env
+                    '''
                 }
             }
         }
