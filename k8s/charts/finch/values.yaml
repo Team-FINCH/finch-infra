@@ -1,0 +1,43 @@
+# 앱 계층 기본값. CI 는 이미지 태그만 --set 으로 주입한다:
+#   helm upgrade --install finch . -n finch --atomic --set backend.image.tag=<커밋해시>
+# 리소스 값은 compose 의 mem_limit 과 같은 근거의 보수적 초기값 — 실측 후 조정 (Jira FINCH-59).
+
+backend:
+  image:
+    repository: finch/backend
+    # latest 는 imagePullPolicy 기본값을 Always 로 만들어 레지스트리 없는 반입 방식과 충돌한다.
+    # CI 가 커밋 해시로 덮어쓰는 것을 전제로 한 자리 표시자다.
+    tag: latest
+  replicas: 2
+  resources:
+    requests:
+      memory: 768Mi
+    limits:
+      memory: 1536Mi
+
+ai:
+  image:
+    repository: finch/ai
+    tag: latest
+  replicas: 1
+  resources:
+    requests:
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+frontend:
+  image:
+    repository: finch/nginx
+    tag: latest
+  replicas: 1
+  resources:
+    requests:
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+ingress:
+  className: nginx
+  # 도메인 확보 전이라 host 미지정(모든 호스트 수신). 확보 후 값 지정 + TLS 추가.
+  host: ""

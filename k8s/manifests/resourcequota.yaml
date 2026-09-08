@@ -1,0 +1,12 @@
+# 네임스페이스 총량 상한. 컨테이너 하나의 폭주가 노드 전체를 먹는 것을 막는 2차 방어선
+# (1차는 각 Deployment/StatefulSet 의 resources.limits).
+# 값은 compose 의 mem_limit 합계(앱 스택 약 5.1G)에 여유를 더한 초기값 — 실측 후 조정 (Jira FINCH-59).
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: finch-quota
+  namespace: finch
+spec:
+  hard:
+    requests.memory: 6Gi
+    limits.memory: 8Gi
