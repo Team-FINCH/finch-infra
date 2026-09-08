@@ -187,6 +187,61 @@ compose 프로젝트 이름을 `finch` 로 고정했으므로, 수동 기동(위
 Jenkins job 설정(최초 1회)과 Credentials 목록은 `Jenkinsfile` 상단 주석 참고.
 수동 전체 배포가 필요하면 job 의 `FORCE_ALL` 파라미터를 켜고 실행한다.
 
+## 환경변수 계약 검사
+
+`infra/scripts/check-env-contract.py` 가 `backend/src/main/resources/application.yaml` 의
+`${NAME}` 목록과 `infra/docker-compose.yml` 의 backend `environment:` 키를 대조한다.
+`infra/.gitlab-ci.yml` 의 `infra:env-contract` job 이 MR 파이프라인에서 돌린다.
+
+### 왜 필요한가
+
+2026-09-07~08 에 같은 구조의 버그가 네 건 나왔다. 전부 **계약은 선언됐고 주입이 없었다.**
+
+| 티켓 | 이름 | 증상 |
+|---|---|---|
+| FINCH-151 | `FINCH_PUBLIC_BASE_URL`, `FINCH_FRONT_BASE_URL` | 운영이 localhost 기본값으로 뜸. 결제 복귀 깨짐 |
+| FINCH-159 | `KAKAOPAY_SECRET_KEY` | 기동 성공, 결제 시점 인증 실패 |
+| FINCH-171 | `FINCH_AI_BASE_URL` | backend 가 자기 자신의 8000 을 호출. AI 중계 전부 실패 |
+
+compose 는 `environment:` 에 적힌 키만 컨테이너로 넘긴다. `--env-file` 은 `${VAR}` 치환용
+변수를 주는 것이지 컨테이너 환경변수가 아니다. 그래서 `.env` 에 값이 있어도 `environment:` 에
+참조가 없으면 전달되지 않는다.
+
+**기존 장치가 이 누락을 못 잡는다.**
+
+- `${VAR:?}` 가드는 `.env` 에 값이 없는 것을 잡는다. 여기서 빠진 것은 compose 의 참조 자체라 검사 대상이 없다
+- 애플리케이션에 기본값이 있으면 조용히 그 값으로 뜬다
+- 기본값이 없어도 `@ConfigurationProperties` 바인딩은 해석 안 되는 placeholder 를 예외 대신
+  문자열로 남긴다. `@Value` 와 다르다 (FINCH-159 실측)
+
+세 경우 모두 신호가 없다. 사람이 두 파일을 기억으로 대조할 일이 아니다.
+
+### 판정
+
+| 상황 | 결과 |
+|---|---|
+| 요구되는 이름이 모두 주입됨 | 통과 |
+| 주입 안 된 이름이 있음 | **실패.** 기본값 유무에 따라 다른 설명을 출력한다 |
+| 값이 아직 없어 주입 못 하는 이름 | 스크립트의 `PENDING` 에 이유와 함께 넣으면 통과 |
+| `PENDING` 의 이름이 이미 주입됨 | **실패.** 목록이 낡았으니 지우라고 알린다 |
+| `PENDING` 에 계약에 없는 이름이 있음 | **실패.** 같은 이유 |
+| 파싱 결과가 비정상 (요구·주입이 5개 미만) | **실패.** 구조가 바뀌어 조용히 통과하는 것을 막는다 |
+
+`PENDING` 은 "아직 값이 없다" 와 "주입을 빠뜨렸다" 를 구분하기 위한 장치다. 지금은 네 건이
+들어 있다 — 내부 인증 토큰 2건(backend 와 AI 가 같은 값을 써야 한다)과 KIS 앱키 2건(외부 발급).
+넣을 때는 이유와 티켓 번호를 함께 적는다.
+
+### 로컬에서 돌리는 법
+
+```bash
+python3 infra/scripts/check-env-contract.py
+```
+
+### 범위
+
+backend 만 본다. AI 파트는 Python 에서 환경변수를 직접 읽어 계약 모양이 달라 넣지 않았다.
+필요해지면 별건으로 다룬다.
+
 ## HTTPS 와 인증서
 
 발급처는 Let's Encrypt, 대상은 `finchapp.org` 한 건이다.
