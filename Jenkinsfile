@@ -10,10 +10,12 @@
 //       finch-kakaopay-secret (Secret text) : 카카오페이 Secret Key. 아래 '비밀값 주입' 이
 //         infra/.env 에 한 줄로 덧붙인다. Secret file 은 내용을 다시 볼 수 없어 한 줄 추가에도
 //         파일 전체 교체가 필요하므로, 나중에 추가된 값은 Secret text 로 분리한다 (FINCH-159)
-//       finch-extra-env       (Secret text, 여러 줄) : 위와 같은 이유로 나중에 추가된 backend
-//         비밀값을 모아 둔다. KEY=VALUE 를 줄마다 적으면 infra/.env 로 그대로 덧붙는다
-//         (FINCH-173). 값을 더 넣을 때는 새 credential 을 만들지 말고 여기에 줄을 더한다
-//       finch-ai-extra-env    (Secret text, 여러 줄) : 같은 역할의 AI 쪽. infra/ai.env 로 덧붙는다.
+//       finch-extra-env       (Secret file) : 위와 같은 이유로 나중에 추가된 backend 비밀값을
+//         모아 둔다. KEY=VALUE 를 줄마다 적은 파일이고 infra/.env 뒤에 그대로 이어 붙인다
+//         (FINCH-173). 값을 더 넣을 때는 새 credential 을 만들지 말고 이 파일에 줄을 더한다.
+//         Secret text 가 아닌 이유: plain-credentials 의 Secret text 는 <f:password/> 한 줄
+//         입력이라 여러 줄을 붙여넣으면 개행이 잘린다 (플러그인 jelly 확인). 파일은 그대로 보존된다
+//       finch-ai-extra-env    (Secret file) : 같은 역할의 AI 쪽. infra/ai.env 뒤에 이어 붙인다.
 //         ai 서비스는 compose 에서 env_file: ai.env 를 쓰므로 줄이 늘면 그대로 컨테이너에 들어간다
 pipeline {
     agent any
@@ -79,8 +81,8 @@ pipeline {
                     file(credentialsId: 'finch-env',    variable: 'ENV_FILE'),
                     file(credentialsId: 'finch-ai-env', variable: 'AI_ENV_FILE'),
                     string(credentialsId: 'finch-kakaopay-secret', variable: 'KAKAOPAY_SECRET'),
-                    string(credentialsId: 'finch-extra-env',       variable: 'EXTRA_ENV'),
-                    string(credentialsId: 'finch-ai-extra-env',    variable: 'AI_EXTRA_ENV'),
+                    file(credentialsId: 'finch-extra-env',    variable: 'EXTRA_ENV_FILE'),
+                    file(credentialsId: 'finch-ai-extra-env', variable: 'AI_EXTRA_ENV_FILE'),
                 ]) {
                     // set +x: Jenkins 의 sh 는 기본이 -x 라 확장된 명령이 콘솔에 찍힌다.
                     // 앞줄 개행을 붙이는 이유는 Secret file 이 개행으로 끝나지 않을 수 있어서다.
@@ -89,8 +91,10 @@ pipeline {
                         cp "$ENV_FILE" infra/.env
                         cp "$AI_ENV_FILE" infra/ai.env
                         printf '\\nKAKAOPAY_SECRET_KEY=%s\\n' "$KAKAOPAY_SECRET" >> infra/.env
-                        printf '\\n%s\\n' "$EXTRA_ENV" >> infra/.env
-                        printf '\\n%s\\n' "$AI_EXTRA_ENV" >> infra/ai.env
+                        printf '\\n' >> infra/.env
+                        cat "$EXTRA_ENV_FILE" >> infra/.env
+                        printf '\\n' >> infra/ai.env
+                        cat "$AI_EXTRA_ENV_FILE" >> infra/ai.env
                     '''
                 }
             }
