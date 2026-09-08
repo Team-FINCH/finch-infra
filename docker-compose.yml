@@ -70,6 +70,11 @@ services:
       FINCH_PUBLIC_BASE_URL: ${FINCH_PUBLIC_BASE_URL:-https://finchapp.org}
       FINCH_FRONT_BASE_URL: ${FINCH_FRONT_BASE_URL:-https://finchapp.org}
       KAKAOPAY_SECRET_KEY: ${KAKAOPAY_SECRET_KEY:?KAKAOPAY_SECRET_KEY 가 필요합니다}
+      KIS_APP_KEY: ${KIS_APP_KEY:?KIS_APP_KEY 가 필요합니다}
+      KIS_APP_SECRET: ${KIS_APP_SECRET:?KIS_APP_SECRET 가 필요합니다}
+      BACKEND_INTERNAL_TOKEN: ${BACKEND_INTERNAL_TOKEN:?BACKEND_INTERNAL_TOKEN 가 필요합니다}
+      AI_INTERNAL_TOKEN: ${AI_INTERNAL_TOKEN:?AI_INTERNAL_TOKEN 가 필요합니다}
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
     depends_on:
       postgres-backend:
         condition: service_healthy
