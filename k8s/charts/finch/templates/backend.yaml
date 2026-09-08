@@ -1,0 +1,73 @@
+# backend — 원장의 단일 진실 공급원.
+# replicas 2 + maxUnavailable 0: 새 Pod 가 Ready(readinessProbe 통과) 되기 전에는
+# 기존 Pod 를 내리지 않는다. 무중단 배포의 실체가 이 세 줄이다.
+# 접속 계약은 backend/src/main/resources/application.yaml 이 정의한다
+# (postgres-secret 주입, Service 이름 postgres/redis 가 호스트).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+spec:
+  replicas: {{ .Values.backend.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          # 레지스트리 없이 k3s ctr images import 로 반입하므로 외부 pull 을 시도하면 안 된다
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: postgres-secret
+          env:
+            - name: TZ
+              value: Asia/Seoul
+            - name: POSTGRES_HOST
+              value: postgres
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: REDIS_HOST
+              value: redis
+            - name: REDIS_PORT
+              value: "6379"
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          # readiness: 트래픽을 받아도 되는가 (실패 시 Service 에서 제외만)
+          # liveness: 프로세스가 살아 있는가 (실패 시 재시작) — 관대하게, readiness 는 민감하게
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 6
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8080

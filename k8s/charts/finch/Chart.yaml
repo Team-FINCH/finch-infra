@@ -1,0 +1,7 @@
+apiVersion: v2
+name: finch
+description: FINCH 앱 계층 (backend, ai, frontend). DB와 Redis 는 인프라 계층(manifests/, kubectl 소유) — 폭발 반경 격리.
+type: application
+# version 은 차트 구조가 바뀔 때, appVersion 은 배포하는 애플리케이션 버전 (서로 다른 의미)
+version: 0.1.0
+appVersion: "0.1.0"

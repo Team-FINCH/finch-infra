@@ -1,0 +1,63 @@
+# AI 파트 전용 DB (pgvector). backend DB 와 분리 — 파트 간 소유권 경계와
+# Flyway/Alembic 마이그레이션 이력 분리 (backConvention §1). 시크릿은 postgres-ai-secret.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-ai
+  namespace: finch
+spec:
+  clusterIP: None
+  selector:
+    app: postgres-ai
+  ports:
+    - port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-ai
+  namespace: finch
+spec:
+  serviceName: postgres-ai
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-ai
+  template:
+    metadata:
+      labels:
+        app: postgres-ai
+    spec:
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg17
+          envFrom:
+            - secretRef:
+                name: postgres-ai-secret
+          env:
+            - name: TZ
+              value: Asia/Seoul
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)", "-d", "$(POSTGRES_DB)"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 5Gi
