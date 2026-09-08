@@ -17,14 +17,8 @@ SERVICE = "backend"
 # 값이 아직 어디에도 없어 주입할 수 없는 이름. 주입 누락과 구분하기 위해 명시한다.
 # 값이 정해져 주입되면 이 목록에서 지운다 — 지우지 않으면 아래 '목록이 낡았다' 로 실패한다.
 PENDING = {
-    "AI_INTERNAL_TOKEN":
-        "AI 쪽 BACKEND_SERVICE_TOKEN 과 같은 값이어야 한다. 양쪽 모두 빈 값 (FINCH-171)",
-    "BACKEND_INTERNAL_TOKEN":
-        "AI 쪽 BACKEND_SERVICE_TOKEN 과 같은 값이어야 한다. 양쪽 모두 빈 값 (FINCH-171)",
-    "KIS_APP_KEY":
-        "한국투자증권 발급 대기. AI 쪽도 빈 값 (FINCH-171)",
-    "KIS_APP_SECRET":
-        "한국투자증권 발급 대기. AI 쪽도 빈 값 (FINCH-171)",
+    # 예시)
+    #   "SOME_KEY": "외부 발급 대기. 값이 정해지면 이 줄을 지운다 (FINCH-xxx)",
 }
 
 MIN_REQUIRED = 5
