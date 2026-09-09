@@ -130,6 +130,62 @@ helm upgrade --install finch infra/k8s/charts/finch -n finch --atomic --timeout 
 sudo ./infra/k8s/install-ingress-nginx.sh
 ```
 
+## Ingress 와 TLS (FINCH-133)
+
+**포트를 인자로 받는다.** 검증과 커트오버가 같은 스크립트를 쓴다.
+
+```bash
+sudo ./infra/k8s/install-ingress-nginx.sh                       # 8081 / 8443 (검증)
+sudo HTTP_PORT=80 HTTPS_PORT=443 ./infra/k8s/install-ingress-nginx.sh   # 커트오버
+```
+
+`hostNetwork` 대신 **`hostPort`** 를 쓴다. hostNetwork 는 파드가 호스트 네트워크를 그대로
+써서 컨트롤러가 여는 포트를 바꾸기 번거롭고, 두 스택을 나란히 띄울 수 없다.
+
+> [!warning] hostPort 는 `ss` 에 리스너로 나타나지 않는다
+> CNI portmap 플러그인이 **iptables DNAT** 로 처리하므로 리스닝 소켓이 없다.
+> `ss -tlnp | grep 8443` 은 비어 있는데 `curl https://127.0.0.1:8443/` 은 200 이다.
+> 처음 이걸로 "포트가 열리지 않았다" 고 오판했다. **포트 판정은 응답으로 한다.**
+> 규칙 확인은 `sudo iptables -t nat -S | grep 8443` 이다.
+
+### TLS Secret 은 차트가 만들지 않는다
+
+인증서는 호스트 certbot 이 발급하고 `infra/k8s/scripts/sync-tls-secret.sh` 가 Secret 으로 옮긴다.
+
+```bash
+sudo ./infra/k8s/scripts/sync-tls-secret.sh
+```
+
+**차트에 넣지 않는 이유는 갱신 주기가 다르기 때문이다.** 인증서는 클러스터 밖에서 90일마다
+바뀌는데 helm 릴리스는 배포마다 갱신된다. 차트가 Secret 을 소유하면 두 주기가 어긋난다.
+
+`renew-cert.sh` 가 갱신 후 이 스크립트를 부른다. **호스트 인증서만 갱신하고 Secret 을 두면
+클러스터는 만료된 인증서를 계속 쓰고, 증상이 90일 뒤에 나타난다.**
+
+스크립트는 마지막에 **지문을 대조한다.** ingress-nginx 가 Secret 변경을 watch 해서 자동으로
+다시 읽지만, watch 가 늦거나 실패할 수 있어 "넣었다" 와 "반영됐다" 를 따로 확인한다.
+
+### ACME 챌린지는 커트오버 때 켠다
+
+`values.yaml` 의 `ingress.acmeChallenge.enabled` 가 `false` 다. 지금은 80 을 호스트 nginx 가
+잡고 있어 `/var/www/certbot` 서빙이 그대로 동작한다.
+
+**커트오버로 80 이 Ingress 로 넘어오면 webroot 갱신이 깨진다.** 갱신은 90일마다 오므로
+직후에는 아무 증상이 없고 두 달 뒤에 만료된다. 그 Ingress 규칙과 대상 서비스는
+FINCH-136 에서 만든다.
+
+그 규칙의 `ssl-redirect: "false"` 가 핵심이다. **챌린지는 HTTP 로 와야 한다** — 인증서를
+받기 전에는 HTTPS 가 성립하지 않으므로 리다이렉트를 걸면 갱신이 영구 실패한다.
+
+### 검증 단계에서 8081 리다이렉트는 포트가 빠진다
+
+```
+http://finchapp.org:8081/  →  308  https://finchapp.org/
+```
+
+`ssl-redirect` 가 포트를 붙이지 않아 **443(기존 Compose)으로 간다.** 검증 중에는 혼란스럽지만
+커트오버 후에는 정확한 동작이므로 그대로 둔다. 8443 을 검증할 때는 HTTPS 로 직접 호출한다.
+
 ## helm upgrade 의 values 유지 함정
 
 `helm upgrade` 는 이전 릴리스에서 `--set` 으로 준 값을 **다음 upgrade 에도 유지한다.**

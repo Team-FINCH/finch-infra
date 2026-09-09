@@ -50,5 +50,19 @@ frontend:
 
 ingress:
   className: nginx
-  # 도메인 확보 전이라 host 미지정(모든 호스트 수신). 확보 후 값 지정 + TLS 추가.
-  host: ""
+  host: finchapp.org
+
+  tls:
+    enabled: true
+    # 인증서는 호스트 certbot 이 발급하고 sync-tls-secret.sh 가 이 이름으로 Secret 을 만든다.
+    # 차트가 Secret 을 만들지 않는다 — 90일마다 클러스터 밖에서 갱신되므로 helm 릴리스와
+    # 주기가 어긋난다.
+    secretName: finch-tls
+
+  acmeChallenge:
+    # 커트오버로 80 을 넘겨받은 뒤에 켠다 (FINCH-136).
+    # 그 전에는 호스트 nginx 가 /var/www/certbot 을 서빙하고 있어 이 규칙이 필요 없고,
+    # 켜면 존재하지 않는 서비스를 가리키는 Ingress 가 생긴다.
+    enabled: false
+    serviceName: acme-webroot
+    servicePort: 80

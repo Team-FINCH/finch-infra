@@ -1,16 +1,31 @@
 # 단일 진입점 — compose 의 nginx.conf 라우팅을 Ingress 리소스로 옮긴 것.
 # ai 는 내부 전용이라 여기 없다 (FINCH-99 와 같은 원칙).
-# 웹소켓(STOMP): proxy-read-timeout 상향은 유휴 연결이 60초에 끊기는 것을 막는다.
+#
+# TLS 는 호스트 certbot 이 발급한 인증서를 Secret 으로 받아 쓴다.
+# Secret 은 infra/k8s/scripts/sync-tls-secret.sh 가 만들고 갱신한다 — 차트가 만들지
+# 않는 이유는 인증서가 클러스터 밖에서 90일마다 바뀌기 때문이다. 차트에 넣으면
+# helm 릴리스와 갱신 주기가 어긋난다.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: finch
   annotations:
+    # 웹소켓(STOMP): 기본 60초로는 유휴 연결이 끊긴다. 실시간 시세가 STOMP 라 필수다.
     nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
     nginx.ingress.kubernetes.io/proxy-body-size: 20m
+    {{- if .Values.ingress.tls.enabled }}
+    # HTTP 로 온 요청을 HTTPS 로 넘긴다. compose nginx 의 80 -> 443 리다이렉트와 같은 역할.
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
   rules:
     - {{- if .Values.ingress.host }}
       host: {{ .Values.ingress.host }}
@@ -31,3 +46,37 @@ spec:
                 name: frontend
                 port:
                   number: 80
+{{- if .Values.ingress.acmeChallenge.enabled }}
+---
+# ACME 챌린지 전용 Ingress.
+#
+# 커트오버로 80 이 Ingress 로 넘어오면 certbot webroot 갱신이 깨진다 — 호스트 nginx 가
+# /var/www/certbot 을 서빙하던 자리를 Ingress 가 가져가기 때문이다. 갱신은 90일마다
+# 오므로 커트오버 직후에는 아무 증상이 없고, 두 달 뒤에 만료된다.
+#
+# 이 Ingress 는 그 경로만 별도 서비스로 보낸다. 대상 서비스는 커트오버 티켓
+# (FINCH-136) 에서 만든다 — 지금은 8443 검증 단계라 80 이 여전히 호스트 nginx 것이고,
+# 여기서 켜면 존재하지 않는 서비스를 가리키는 규칙이 생긴다.
+#
+# ssl-redirect 를 끄는 것이 핵심이다. 챌린지는 HTTP 로 와야 한다 — 인증서를 받기 전에는
+# HTTPS 가 성립하지 않으므로, 리다이렉트를 걸면 갱신이 영구 실패한다.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: finch-acme
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /.well-known/acme-challenge/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.ingress.acmeChallenge.serviceName }}
+                port:
+                  number: {{ .Values.ingress.acmeChallenge.servicePort }}
+{{- end }}

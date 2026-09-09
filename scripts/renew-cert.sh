@@ -35,4 +35,20 @@ else
   echo "▶ finch-nginx 미실행 — reload 건너뜀"
 fi
 
+# k3s 가 있으면 TLS Secret 도 함께 갱신한다 (FINCH-133).
+# 호스트 인증서만 갱신하고 Secret 을 두면 클러스터는 만료된 인증서를 계속 쓴다.
+# 증상이 90일 뒤에 나타나므로 갱신 경로에 붙여 둔다.
+#
+# 이 갱신이 배포나 인증서 자체를 깨뜨리지 않도록 실패해도 스크립트를 멈추지 않는다 —
+# 호스트 nginx 는 이미 새 인증서를 들고 있고, Secret 갱신 실패는 별개 문제다.
+SYNC_TLS="$(dirname "$0")/../k8s/scripts/sync-tls-secret.sh"
+if command -v k3s >/dev/null 2>&1 && [ -x "$SYNC_TLS" ]; then
+  echo "▶ k8s TLS Secret 갱신"
+  if ! DOMAIN="$DOMAIN" "$SYNC_TLS"; then
+    echo "! TLS Secret 갱신 실패 — 호스트 인증서는 정상이다. 수동 확인이 필요하다" >&2
+  fi
+else
+  echo "▶ k3s 미설치 또는 스크립트 없음 — TLS Secret 갱신 건너뜀"
+fi
+
 echo "✓ 완료"
