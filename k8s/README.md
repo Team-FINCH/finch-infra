@@ -102,6 +102,22 @@ kubectl -n finch create secret generic postgres-ai-secret \
   --from-literal=POSTGRES_USER=... --from-literal=POSTGRES_PASSWORD=... --from-literal=POSTGRES_DB=...
 kubectl -n finch create secret generic ai-env --from-env-file=infra/ai.env
 
+# backend 비밀값. 값의 원본은 Jenkins Credentials 다 (finch-env, finch-extra-env,
+# finch-kakaopay-secret). compose 는 .env 로 받고 여기서는 Secret 으로 받는다 —
+# 주입 경로만 다르고 이름과 값은 같다.
+#
+# 이 목록이 곧 계약이다. infra/scripts/check-env-contract.py 가 아래 --from-literal
+# 이름을 읽어 application.yaml 의 요구와 대조한다. 키를 늘리면 여기도 늘린다.
+kubectl -n finch create secret generic backend-secret \
+  --from-literal=JWT_SECRET=... \
+  --from-literal=KAKAO_CLIENT_ID=... \
+  --from-literal=KAKAO_CLIENT_SECRET=... \
+  --from-literal=KAKAOPAY_SECRET_KEY=... \
+  --from-literal=KIS_APP_KEY=... \
+  --from-literal=KIS_APP_SECRET=... \
+  --from-literal=BACKEND_INTERNAL_TOKEN=... \
+  --from-literal=AI_INTERNAL_TOKEN=...
+
 # 3. 인프라 계층 (DB, Redis, ResourceQuota)
 kubectl apply -f infra/k8s/manifests/
 
