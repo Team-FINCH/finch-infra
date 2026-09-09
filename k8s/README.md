@@ -130,6 +130,25 @@ helm upgrade --install finch infra/k8s/charts/finch -n finch --atomic --timeout 
 sudo ./infra/k8s/install-ingress-nginx.sh
 ```
 
+## helm upgrade 의 values 유지 함정
+
+`helm upgrade` 는 이전 릴리스에서 `--set` 으로 준 값을 **다음 upgrade 에도 유지한다.**
+그래서 `--set` 없이 다시 upgrade 해도 차트의 `values.yaml` 기본값으로 돌아가지 않는다.
+
+```bash
+helm upgrade finch . --set backend.image.tag=test1   # tag=test1
+helm upgrade finch .                                 # tag 가 여전히 test1 이다
+helm upgrade finch . --reset-values                  # 여기서야 values.yaml 기본값으로 돌아온다
+```
+
+2026-09-09 에 rolling update 를 검증하려고 임시 태그를 준 뒤 되돌리려다 걸렸다.
+`imagePullPolicy: IfNotPresent` 라 그 이미지가 로컬에 남아 있는 동안은 파드가 계속 도는데,
+**태그만 지우고 릴리스를 되돌리지 않으면 다음 파드 재시작에서** `ErrImagePull` **로 죽는다.**
+도는 파드만 보고 정상이라고 판정할 수 없다 — `helm get values` 나 Deployment 의 image 를 본다.
+
+배포 파이프라인이 매번 `--set backend.image.tag=<커밋해시>` 를 주게 되면(FINCH-135)
+이 문제는 사라진다. 손으로 실험한 뒤에만 주의한다.
+
 ## Compose 대비 달라지는 것 (전환 시 확인 목록)
 
 - [x] **`imagePullPolicy: IfNotPresent`** — 태그가 `latest` 면 k8s 기본값이 `Always` 라,
