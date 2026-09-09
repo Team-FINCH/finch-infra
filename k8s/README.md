@@ -128,6 +128,11 @@ helm upgrade --install finch infra/k8s/charts/finch -n finch --atomic --timeout 
 # 5. Ingress 는 커트오버 때만 (FINCH-133, 136).
 #    Compose nginx 가 80/443 을 놓기 전에는 스크립트가 스스로 거부한다.
 sudo ./infra/k8s/install-ingress-nginx.sh
+
+# 6. 관측 계층 (FINCH-134). 네임스페이스가 다르다.
+#    Grafana 비밀번호는 차트가 만들지 않는다 — 없으면 파드가 뜨지 않는다(의도).
+kubectl -n finch-observability create secret generic grafana-admin-secret   --from-literal=admin-user=admin --from-literal=admin-password=...
+helm upgrade --install finch-obs infra/k8s/charts/finch-observability   -n finch-observability --atomic --timeout 10m
 ```
 
 ## helm upgrade 의 values 유지 함정
@@ -148,6 +153,72 @@ helm upgrade finch . --reset-values                  # 여기서야 values.yaml 
 
 배포 파이프라인이 매번 `--set backend.image.tag=<커밋해시>` 를 주게 되면(FINCH-135)
 이 문제는 사라진다. 손으로 실험한 뒤에만 주의한다.
+
+## 관측 스택에서 밟은 함정 (FINCH-134)
+
+### `discovery.docker` 는 파드 컨테이너를 대상으로 만들지 않는다
+
+런타임이 Docker 라(`--docker`) 파드 컨테이너도 같은 도커 데몬 위에 있고 `docker ps`
+에 그대로 보인다. 그래서 도커 소켓 하나로 파드 로그와 클러스터 밖 로그를 동시에
+수집할 수 있을 것 같지만 **안 된다.**
+
+`discovery.docker` 는 (컨테이너, 네트워크) 쌍으로 대상을 만든다. 파드 컨테이너는
+pause 컨테이너의 네트워크 이름공간을 공유하므로 자기 네트워크가 없다.
+
+```
+파드 컨테이너      NetworkMode=container:<sandbox>  Networks=0  Ports=map[]
+compose 컨테이너   NetworkMode=finch_default         Networks=1  Ports=8080/tcp
+```
+
+실측에서 발견된 대상 24개 중 쿠버네티스 라벨을 가진 것이 **0개**였다.
+**`docker ps` 로는 보이는데 디스커버리로는 안 보인다** — 확인한 도구와 쓰는 도구가
+달랐던 경우다. 파드 로그는 `/var/log/pods` 파일을 읽는 별도 파이프라인으로 받는다.
+
+`/var/log/pods` 의 파일은 `/var/lib/docker/containers/.../*-json.log` 로 가는 심볼릭
+링크다. **두 경로를 모두 마운트해야 한다.** 하나만 마운트하면 링크는 보이는데 내용을
+읽을 수 없고, 증상은 "로그가 안 온다" 로만 나타난다.
+
+파일 내용이 도커 JSON 이라 `loki.process` 에 `stage.docker` 가 필요하다. 런타임을
+containerd 로 바꾸면 CRI 텍스트 형식이 되므로 `stage.cri` 로 바꿔야 한다 —
+**이 설정은 런타임 결정에 묶여 있다.**
+
+### Alloy 수집 위치를 잃으면 Loki 가 막힌다
+
+Alloy 의 위치 파일(`/var/lib/alloy-data`)이 비어 있으면 모든 컨테이너 로그를
+**처음부터** 읽는다. jenkins 와 gitlab-runner 는 몇 주치가 쌓여 있어 Loki 의 기본
+수집 유량(4MB/s)을 넘기고, 넘긴 배치는 429 로 되돌아와 재시도가 쌓인다. 그 뒤에
+새 로그가 줄을 서므로 **파드 로그가 안 들어오는 것처럼 보인다.**
+
+`retention_period`(168h)보다 오래된 줄은 `reject_old_samples` 에 걸려 400 으로
+영구 거부된다. 이건 맞는 동작이다 — 어차피 보관 기간 밖이다.
+
+대응은 둘이다. 위치 파일을 `hostPath` 에 두어 재시작에도 유지하고, 첫 배수를 위해
+`ingestion_rate_mb` 를 올렸다.
+
+### 대시보드가 라벨에 묶여 있다
+
+기존 대시보드가 `job="backend"` 로 4개 패널을 그린다. 애노테이션 기반 범용 job
+하나로 서비스 디스커버리를 짜면 job 이름이 `kubernetes-pods` 가 되어 **그 패널이
+전부 빈다.** 그래서 서비스별로 job 을 따로 두고 이름을 그대로 유지했다.
+
+로그 패널은 `{job="docker", stack=~"finch.*"}` 였다. 파드 로그의 `job` 은 `k8s` 이고
+compose 프로젝트 라벨도 없어 이 필터에 걸리지 않는다. 파드에 `stack="finch-k8s"` 를
+붙이고 쿼리에서 `job` 조건을 뺐다. **파드 로그에 `job="docker"` 를 붙이면 쿼리는
+그대로 동작하지만 라벨이 거짓이 된다** — 도커 소켓이 아니라 파일로 읽은 것이다.
+
+### node-exporter 도 함께 옮겨야 한다
+
+compose 의 node-exporter 는 포트를 퍼블리시하지 않아 compose 네트워크 안에서만
+닿는다. 클러스터의 Prometheus 가 긁을 수 없어 CPU, 메모리, 디스크 패널이 빈다.
+
+### cAdvisor 는 kubelet 이 대신한다
+
+compose 에서 cAdvisor 컨테이너가 overlayfs 때문에 컨테이너를 식별하지 못해 제거했다.
+kubelet 이 `/metrics/cadvisor` 로 같은 지표를 내장 노출하고, 컨테이너 식별을 자기가
+띄운 파드 정보로 하므로 스토리지 드라이버와 무관하다. **이관으로 되찾은 지표다.**
+
+`nodes/metrics` RBAC 이 있어야 한다. `nodes` 만 주면 대상은 발견되는데 스크레이프가
+401 이 된다 — 설정이 맞는 것처럼 보이고 `up` 만 0 으로 남는다.
 
 ## Compose 대비 달라지는 것 (전환 시 확인 목록)
 
