@@ -32,6 +32,30 @@ spec:
               value: prod
             - name: BACKEND_BASE_URL
               value: http://backend:8080
+            # DATABASE_URL 은 compose 와 같은 방식으로 여기서 조립한다.
+            # ai.env 에도 같은 이름이 있지만 그 값은 로컬 개발용(localhost)이고,
+            # compose 는 environment: 로 덮어쓴다. envFrom 만 쓰면 그 localhost 가
+            # 그대로 들어와 파드가 DB 를 못 찾는다 — env 가 envFrom 을 덮으므로 여기 둔다.
+            #
+            # $(VAR) 확장은 같은 env 목록에 앞서 정의된 이름만 참조한다 (envFrom 은 안 된다).
+            # 그래서 세 조각을 먼저 secretKeyRef 로 꺼낸 뒤 조립한다.
+            - name: AI_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-ai-secret
+                  key: POSTGRES_USER
+            - name: AI_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-ai-secret
+                  key: POSTGRES_PASSWORD
+            - name: AI_DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-ai-secret
+                  key: POSTGRES_DB
+            - name: DATABASE_URL
+              value: "postgresql+asyncpg://$(AI_DB_USER):$(AI_DB_PASSWORD)@postgres-ai:5432/$(AI_DB_NAME)"
           resources:
             {{- toYaml .Values.ai.resources | nindent 12 }}
           readinessProbe:

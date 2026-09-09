@@ -102,6 +102,22 @@ kubectl -n finch create secret generic postgres-ai-secret \
   --from-literal=POSTGRES_USER=... --from-literal=POSTGRES_PASSWORD=... --from-literal=POSTGRES_DB=...
 kubectl -n finch create secret generic ai-env --from-env-file=infra/ai.env
 
+# backend 비밀값. 값의 원본은 Jenkins Credentials 다 (finch-env, finch-extra-env,
+# finch-kakaopay-secret). compose 는 .env 로 받고 여기서는 Secret 으로 받는다 —
+# 주입 경로만 다르고 이름과 값은 같다.
+#
+# 이 목록이 곧 계약이다. infra/scripts/check-env-contract.py 가 아래 --from-literal
+# 이름을 읽어 application.yaml 의 요구와 대조한다. 키를 늘리면 여기도 늘린다.
+kubectl -n finch create secret generic backend-secret \
+  --from-literal=JWT_SECRET=... \
+  --from-literal=KAKAO_CLIENT_ID=... \
+  --from-literal=KAKAO_CLIENT_SECRET=... \
+  --from-literal=KAKAOPAY_SECRET_KEY=... \
+  --from-literal=KIS_APP_KEY=... \
+  --from-literal=KIS_APP_SECRET=... \
+  --from-literal=BACKEND_INTERNAL_TOKEN=... \
+  --from-literal=AI_INTERNAL_TOKEN=...
+
 # 3. 인프라 계층 (DB, Redis, ResourceQuota)
 kubectl apply -f infra/k8s/manifests/
 
@@ -113,6 +129,25 @@ helm upgrade --install finch infra/k8s/charts/finch -n finch --atomic --timeout 
 #    Compose nginx 가 80/443 을 놓기 전에는 스크립트가 스스로 거부한다.
 sudo ./infra/k8s/install-ingress-nginx.sh
 ```
+
+## helm upgrade 의 values 유지 함정
+
+`helm upgrade` 는 이전 릴리스에서 `--set` 으로 준 값을 **다음 upgrade 에도 유지한다.**
+그래서 `--set` 없이 다시 upgrade 해도 차트의 `values.yaml` 기본값으로 돌아가지 않는다.
+
+```bash
+helm upgrade finch . --set backend.image.tag=test1   # tag=test1
+helm upgrade finch .                                 # tag 가 여전히 test1 이다
+helm upgrade finch . --reset-values                  # 여기서야 values.yaml 기본값으로 돌아온다
+```
+
+2026-09-09 에 rolling update 를 검증하려고 임시 태그를 준 뒤 되돌리려다 걸렸다.
+`imagePullPolicy: IfNotPresent` 라 그 이미지가 로컬에 남아 있는 동안은 파드가 계속 도는데,
+**태그만 지우고 릴리스를 되돌리지 않으면 다음 파드 재시작에서** `ErrImagePull` **로 죽는다.**
+도는 파드만 보고 정상이라고 판정할 수 없다 — `helm get values` 나 Deployment 의 image 를 본다.
+
+배포 파이프라인이 매번 `--set backend.image.tag=<커밋해시>` 를 주게 되면(FINCH-135)
+이 문제는 사라진다. 손으로 실험한 뒤에만 주의한다.
 
 ## Compose 대비 달라지는 것 (전환 시 확인 목록)
 

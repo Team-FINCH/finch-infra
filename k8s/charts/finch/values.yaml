@@ -2,7 +2,18 @@
 #   helm upgrade --install finch . -n finch --atomic --set backend.image.tag=<커밋해시>
 # 리소스 값은 compose 의 mem_limit 과 같은 근거의 보수적 초기값 — 실측 후 조정 (Jira FINCH-59).
 
+# 비밀이 아닌 외부 주소와 프로파일. 비밀값과 갈라 두는 기준은 infra/README.md 참고 —
+# 비밀은 Secret(클러스터에만 만든다), 비밀 아닌 것은 여기(git 에 남아 리뷰를 받는다).
+publicBaseUrl: https://finchapp.org
+frontBaseUrl: https://finchapp.org
+# compose 서비스 이름이 아니라 k8s Service 이름이다. 두 이름이 같아서 값이 같아 보이지만
+# 근거가 다르다 — 서비스 이름을 바꾸면 여기도 바꿔야 한다.
+aiBaseUrl: http://ai:8000
+
 backend:
+  # prod 는 세 가지를 바꾼다 (application.yaml 의 on-profile: prod 절)
+  #   로그를 ECS JSON 으로, finch.price.provider 를 kis 로, seed-on-empty 를 false 로
+  profile: prod
   image:
     repository: finch/backend
     # latest 는 imagePullPolicy 기본값을 Always 로 만들어 레지스트리 없는 반입 방식과 충돌한다.

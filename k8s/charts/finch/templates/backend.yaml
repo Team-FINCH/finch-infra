@@ -32,6 +32,8 @@ spec:
           envFrom:
             - secretRef:
                 name: postgres-secret
+            - secretRef:
+                name: backend-secret
           env:
             - name: TZ
               value: Asia/Seoul
@@ -43,6 +45,14 @@ spec:
               value: redis
             - name: REDIS_PORT
               value: "6379"
+            - name: SPRING_PROFILES_ACTIVE
+              value: {{ .Values.backend.profile | quote }}
+            - name: FINCH_PUBLIC_BASE_URL
+              value: {{ .Values.publicBaseUrl | quote }}
+            - name: FINCH_FRONT_BASE_URL
+              value: {{ .Values.frontBaseUrl | quote }}
+            - name: FINCH_AI_BASE_URL
+              value: {{ .Values.aiBaseUrl | quote }}
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
           # readiness: 트래픽을 받아도 되는가 (실패 시 Service 에서 제외만)
