@@ -71,9 +71,42 @@ pipeline {
                     if (env.SERVICES) {
                         echo "배포 대상: ${env.SERVICES}"
                     } else {
-                        echo '배포 대상 없음 (docs 등 인프라 무관 변경) — 이후 스테이지를 건너뛴다'
+                        echo '배포 대상 없음 (docs 등 인프라 무관 변경) — 컨테이너 관련 스테이지를 건너뛴다'
                     }
                 }
+            }
+        }
+
+        // cron 이 실행하는 운영 스크립트를 갱신한다 (FINCH-204).
+        //
+        // **when 을 걸지 않는다.** 변경 감지는 컨테이너를 다시 만들지 판단하는 것이고,
+        // infra/scripts/ 만 고친 커밋은 SERVICES 를 세우지 않는다. 여기에 게이트를 걸면
+        // 스크립트만 바뀐 배포에서 이 스테이지가 건너뛰어지고, 그러면 지금 고치는 문제가
+        // 그대로 재현된다 — 머지는 됐는데 서버가 옛 파일을 계속 실행한다.
+        stage('운영 스크립트 동기화') {
+            steps {
+                sh '''
+                    set -e
+
+                    # 마운트가 없으면 조용히 넘어가지 않고 실패한다. 이 스테이지의 존재 이유가
+                    # "갱신되지 않는 것을 모르고 지나가는 상태"를 없애는 것이라, 마운트 누락을
+                    # 성공으로 넘기면 스테이지를 넣은 의미가 사라진다.
+                    if [ ! -d /opt/ops ]; then
+                        echo "✗ /opt/ops 가 없다. docker-compose.infra.yml 의 jenkins 바인드 마운트를 확인할 것" >&2
+                        echo "  마운트 추가 후에는 jenkins 컨테이너를 다시 만들어야 적용된다" >&2
+                        exit 1
+                    fi
+
+                    mkdir -p /opt/ops/scripts /opt/ops/k8s
+                    cp -a infra/scripts/. /opt/ops/scripts/
+                    cp -a infra/k8s/.     /opt/ops/k8s/
+
+                    # cron 은 스크립트를 직접 실행하므로 실행 권한이 필요하다.
+                    find /opt/ops/scripts /opt/ops/k8s -name '*.sh' -exec chmod +x {} +
+
+                    echo "▶ 운영 스크립트 동기화 완료"
+                    md5sum /opt/ops/scripts/renew-cert.sh infra/scripts/renew-cert.sh
+                '''
             }
         }
 

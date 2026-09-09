@@ -34,6 +34,13 @@ services:
     volumes:
       - jenkins_home:/var/jenkins_home
       - /var/run/docker.sock:/var/run/docker.sock
+      # cron 이 실행하는 운영 스크립트를 배포가 갱신한다 (FINCH-204).
+      #
+      # cron 4건이 ${APP_DIR}/infra/scripts/ 의 스크립트를 돌리는데(setup-server.sh 가 등록),
+      # 그 디렉터리를 최신으로 유지하는 장치가 없었다. Jenkins 는 자기 워크스페이스에서
+      # 배포하므로 앱은 최신인데 cron 스크립트는 어떤 배포 경로에도 들어 있지 않았다.
+      # 실제로 renew-cert.sh 가 두 달 뒤에 터질 상태로 방치돼 있었다.
+      - ${OPS_DIR:-/srv/FINCH}/infra:/opt/ops
     logging: *default-logging
     restart: unless-stopped
     networks:
