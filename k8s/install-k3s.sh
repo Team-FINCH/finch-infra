@@ -17,10 +17,20 @@ else
   echo "▶ k3s 설치 (런타임 Docker, traefik 비활성)"
   curl -sfL https://get.k3s.io | sh -s - server \
     --docker \
+    --secrets-encryption \
     --disable traefik \
     --kubelet-arg=image-gc-high-threshold=85 \
     --kubelet-arg=image-gc-low-threshold=80 \
     --write-kubeconfig-mode 644
+fi
+
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "^Status: active"; then
+  echo "▶ ufw 에 파드 네트워크(cni0) 허용 추가"
+  echo "   ufw 기본값이 deny(incoming)/deny(routed) 라서, 규칙이 없으면"
+  echo "   파드가 API 서버(10.43.0.1)에 닿지 못해 coredns 가 Ready 되지 않는다."
+  ufw allow in on cni0 >/dev/null
+  ufw route allow in on cni0 >/dev/null
+  ufw route allow out on cni0 >/dev/null
 fi
 
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
@@ -34,6 +44,22 @@ until kubectl get nodes 2>/dev/null | grep -q ' Ready'; do
     exit 1
   fi
   sleep 3
+done
+
+echo "▶ 시스템 파드 Ready 대기 (최대 180초)"
+deadline=$((SECONDS + 180))
+not_ready() {
+  kubectl get pods -A --no-headers 2>/dev/null | awk '{split($3,a,"/"); if (a[1]!=a[2]) print}' | wc -l
+}
+until [ "$(not_ready)" -eq 0 ]; do
+  if [ "$SECONDS" -ge "$deadline" ]; then
+    echo "✗ 180초 안에 시스템 파드가 전부 Ready 가 되지 않았습니다." >&2
+    kubectl get pods -A >&2
+    echo "  coredns 가 'Plugins not ready: kubernetes' 로 멈춰 있으면 파드 네트워크가" >&2
+    echo "  막힌 것이다. 'journalctl -k | grep \"UFW BLOCK\" | grep cni0' 로 확인한다." >&2
+    exit 1
+  fi
+  sleep 5
 done
 
 TARGET_USER="${SUDO_USER:-ubuntu}"
