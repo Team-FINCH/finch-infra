@@ -3,3 +3,14 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: finch
+---
+# 관측 계층은 네임스페이스를 따로 쓴다 (FINCH-134).
+#
+# finch 에는 ResourceQuota(limits.memory 8Gi)가 걸려 있다. 관측 스택을 그 안에 두면
+# 앱이 쓸 수 있는 양을 관측이 잠식하고, 앱이 한도에 부딪히는 순간 **원인을 봐야 할
+# 관측 스택이 함께 축출 대상이 된다.** 자원 압박 상황에서 관측을 잃는 것이 가장
+# 나쁘므로 갈라 둔다.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: finch-observability

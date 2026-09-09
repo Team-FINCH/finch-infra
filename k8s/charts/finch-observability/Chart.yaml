@@ -1,0 +1,7 @@
+apiVersion: v2
+name: finch-observability
+description: 관측 계층 (Prometheus, Loki, Grafana, Alloy, node-exporter). 앱 차트와 분리 — 앱을 재배포하는 동안에도 관측은 떠 있어야 한다.
+type: application
+# version 은 차트 구조가 바뀔 때, appVersion 은 이 스택의 구성 버전
+version: 0.1.0
+appVersion: "0.1.0"

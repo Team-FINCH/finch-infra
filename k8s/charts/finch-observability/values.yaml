@@ -1,0 +1,81 @@
+# 관측 계층 기본값.
+#
+#   helm upgrade --install finch-obs . -n finch-observability --atomic --timeout 10m
+#
+# 앱 차트(charts/finch)와 왜 갈랐는가
+#   수명주기가 다르다. 앱은 커밋마다 배포되고 관측은 구성이 바뀔 때만 배포된다.
+#   한 차트에 두면 앱 배포마다 관측 스택이 함께 갱신 대상이 되어, 배포 중 장애를
+#   관측할 수단이 배포와 함께 흔들린다.
+#
+# 네임스페이스도 갈랐다
+#   finch 네임스페이스에는 ResourceQuota(limits.memory 8Gi)가 걸려 있다.
+#   관측 스택을 그 안에 두면 앱이 쓸 수 있는 양을 관측이 잠식한다.
+
+# 앱이 도는 네임스페이스. Prometheus 서비스 디스커버리와 Grafana 링크가 참조한다.
+appNamespace: finch
+
+# 지표와 로그에 공통으로 붙는 라벨. compose 쪽 prometheus.yml 의 external_labels 와
+# 같은 값을 써야 이관 전후 대시보드 쿼리가 그대로 동작한다.
+env: prod
+project: finch
+
+# 클러스터 밖(Docker compose)에 남는 대상. Jenkins 와 gitlab-runner 는
+# 클러스터 안으로 들어오지 않는다 (FINCH-39 결정).
+# 지표 대상은 노드 IP 로 부른다 — 클러스터 안에서 compose 서비스 이름은 풀리지 않는다.
+external:
+  # 비워 두면 해당 job 을 생성하지 않는다. 값이 없는데 job 을 만들면
+  # Prometheus 가 계속 실패 대상을 긁어 up 지표가 0 으로 남는다.
+  jenkinsTarget: ""
+
+prometheus:
+  image: prom/prometheus:v3.1.0
+  retention: 15d
+  storage: 8Gi
+  resources:
+    requests:
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+loki:
+  image: grafana/loki:3.3.2
+  storage: 8Gi
+  resources:
+    requests:
+      memory: 256Mi
+    limits:
+      memory: 768Mi
+
+grafana:
+  image: grafana/grafana:11.4.0
+  storage: 1Gi
+  resources:
+    requests:
+      memory: 128Mi
+    limits:
+      memory: 384Mi
+
+# 파드 재시작 횟수 등 오브젝트 상태 지표. kubelet 과 cAdvisor 가 주지 않는 축이다.
+kubeStateMetrics:
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.14.0
+  resources:
+    requests:
+      memory: 64Mi
+    limits:
+      memory: 192Mi
+
+alloy:
+  image: grafana/alloy:v1.5.1
+  resources:
+    requests:
+      memory: 128Mi
+    limits:
+      memory: 384Mi
+
+nodeExporter:
+  image: prom/node-exporter:v1.8.2
+  resources:
+    requests:
+      memory: 32Mi
+    limits:
+      memory: 128Mi

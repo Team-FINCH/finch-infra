@@ -1,0 +1,135 @@
+# Alloy — 로그 수집기. DaemonSet 이다.
+#
+# 왜 DaemonSet 인가
+#   로그는 컨테이너가 뜬 노드의 디스크에 있다. Deployment 로 두면 파드가 어느 한
+#   노드에만 있어 다른 노드의 로그를 못 읽는다. DaemonSet 은 노드가 늘 때마다
+#   자동으로 하나씩 배치한다 — 지금은 단일 노드라 결과가 같지만, 노드를 늘리는
+#   순간 설정을 고쳐야 하는 형태로 두지 않는다.
+#
+# 파이프라인이 둘인 이유와 실측 근거는 files/alloy-config.alloy 머리말에 있다.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alloy
+---
+# 파드 로그를 파일에서 읽더라도 **어떤 파드가 이 노드에 있는지**는 API 서버에
+# 물어야 한다. 파일 경로에 namespace, pod, uid, container 가 들어 있어 그 값을
+# 알아야 경로를 조립할 수 있다.
+#
+# 로그를 API 로 읽지 않으므로 pods/log 는 필요 없다. 목록만 본다.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: alloy
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: alloy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: alloy
+subjects:
+  - kind: ServiceAccount
+    name: alloy
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alloy-config
+data:
+  config.alloy: |
+{{ .Files.Get "files/alloy-config.alloy" | indent 4 }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: alloy
+spec:
+  selector:
+    matchLabels:
+      app: alloy
+  template:
+    metadata:
+      labels:
+        app: alloy
+      annotations:
+        checksum/config: {{ .Files.Get "files/alloy-config.alloy" | sha256sum }}
+    spec:
+      serviceAccountName: alloy
+      # 두 가지 때문에 root 가 필요하다.
+      #   1) /var/log/pods 의 파일은 root 소유고 심볼릭 링크가 가리키는
+      #      /var/lib/docker/containers 도 root 만 읽을 수 있다
+      #   2) 도커 소켓은 root:docker 660 이다
+      #
+      # **소켓 접근 권한은 도커 데몬 전체 권한과 같다.** 이 파드가 뚫리면 노드의
+      # 모든 컨테이너를 조작할 수 있다. 그래서 Alloy 는 로그를 읽어 보내는 일만
+      # 하고 다른 것을 붙이지 않는다.
+      securityContext:
+        runAsUser: 0
+      containers:
+        - name: alloy
+          image: {{ .Values.alloy.image }}
+          args:
+            - run
+            - --storage.path=/var/lib/alloy/data
+            - /etc/alloy/config.alloy
+          env:
+            - name: TZ
+              value: Asia/Seoul
+            # discovery.kubernetes 가 이 노드의 파드만 고르는 데 쓴다.
+            # 없으면 필터가 빈 문자열이 되어 아무 파드도 매칭되지 않는다.
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy/config.alloy
+              subPath: config.alloy
+              readOnly: true
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+            # 파드 로그 경로. 이 안의 파일은 /var/lib/docker 로 가는 심볼릭 링크라
+            # **두 경로를 다 마운트해야 한다.** 하나만 마운트하면 링크는 보이는데
+            # 내용을 읽을 수 없고, 증상은 "로그가 안 온다" 로만 나타난다.
+            - name: pod-logs
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: docker-containers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/alloy/data
+          resources:
+            {{- toYaml .Values.alloy.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: alloy-config
+        - name: docker-sock
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
+        - name: pod-logs
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+        - name: docker-containers
+          hostPath:
+            path: /var/lib/docker/containers
+            type: Directory
+        # 어디까지 읽었는지를 담는다. emptyDir 이면 파드가 다시 뜰 때 위치를 잃고
+        # **모든 컨테이너의 로그를 처음부터 다시 읽는다.** 오래된 로그는 Loki 의
+        # reject_old_samples 에 걸려 버려지면서 수집 대역을 잡아먹는다.
+        # 실제로 첫 설치에서 이 일이 났다.
+        - name: data
+          hostPath:
+            path: /var/lib/alloy-data
+            type: DirectoryOrCreate
