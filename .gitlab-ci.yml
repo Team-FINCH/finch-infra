@@ -16,3 +16,27 @@ infra:env-contract:
         - infra/scripts/check-env-contract.py
   script:
     - python3 infra/scripts/check-env-contract.py
+
+infra:ai-keys-verify:
+  image: alpine:3.20
+  # AI 적재기가 쓰는 외부 API 키 4종이 유효한지 확인한다 (FINCH-179).
+  # 적재 코드는 키가 틀려도 그 종목을 건너뛰고 '0건 적재' 로 끝나므로
+  # (ai/app/rag/dart.py:121), 키 문제와 데이터 없음이 구분되지 않는다.
+  #
+  # 외부 API 를 실제로 호출하므로 매 푸시마다 돌리지 않는다. 스크립트가
+  # 바뀔 때와 스케줄, 그리고 수동 실행에만 돈다.
+  #
+  # 키는 Protected 변수라 master 파이프라인에서만 실제 값이 들어온다.
+  # 작업 브랜치에서는 스크립트가 '판정 불가' 로 끝난다.
+  rules:
+    - changes:
+        - infra/scripts/verify-ai-keys.sh
+        - infra/.gitlab-ci.yml
+      allow_failure: true
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - when: manual
+      allow_failure: true
+  before_script:
+    - apk add --no-cache curl
+  script:
+    - sh infra/scripts/verify-ai-keys.sh
