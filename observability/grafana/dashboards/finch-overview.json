@@ -355,7 +355,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "{job=\"docker\", stack=~\"finch.*\"}"
+          "expr": "{stack=~\"finch.*\"}"
         }
       ],
       "options": {
