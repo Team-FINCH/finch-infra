@@ -1,0 +1,131 @@
+// Alloy: 도커 컨테이너의 stdout/stderr 를 읽어 Loki 로 보낸다.
+//
+// 왜 discovery.kubernetes 가 아니라 discovery.docker 인가
+//   k3s 런타임을 Docker 로 정했다(FINCH-39). 그래서 파드의 컨테이너도 결국
+//   같은 도커 데몬 위의 컨테이너이고, 도커 소켓 하나로 다음 둘을 동시에 본다.
+//
+//     클러스터 안  backend, ai, frontend, postgres, redis, ingress-nginx …
+//     클러스터 밖  jenkins, gitlab-runner  ← 이쪽은 discovery.kubernetes 로는 안 보인다
+//
+//   discovery.kubernetes 를 함께 쓰면 파드가 두 경로로 잡혀 **같은 로그가 두 번**
+//   Loki 에 들어간다. 드롭 규칙으로 막을 수 있지만, 그 규칙을 잊으면 조용히 두 배가
+//   되고 양이 늘었다는 것만 보인다. 경로를 하나로 두는 편이 안전하다.
+//
+//   대가: 런타임을 containerd 로 바꾸면 이 설정이 통째로 깨진다. 파드 로그는
+//   CRI 경로(/var/log/pods)로 옮겨야 하고, 그때는 클러스터 밖 도커 로그를 위해
+//   두 번째 파이프라인이 필요해진다. 런타임 결정과 이 파일이 묶여 있다.
+
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "15s"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // 파드마다 함께 뜨는 pause(sandbox) 컨테이너를 뺀다.
+  // 네트워크 이름공간만 잡고 있어 로그가 없는데, 대상 목록에는 잡혀서
+  // 파드 수만큼 빈 스트림이 생긴다.
+  rule {
+    source_labels = ["__meta_docker_container_label_io_kubernetes_docker_type"]
+    regex         = "podsandbox"
+    action        = "drop"
+  }
+
+  // 도커 컨테이너 이름은 "/finch-backend" 처럼 앞에 슬래시가 붙는다. 떼어낸다.
+  // 파드의 컨테이너 이름은 "/k8s_backend_backend-xxxx_finch_..." 형태라 읽기 어렵지만,
+  // 아래 service/pod 라벨이 조회 축이 되므로 이 라벨은 원본 확인용이다.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  // ── 클러스터 안 (파드) ──────────────────────────────────
+  // kubelet 이 컨테이너에 붙여 주는 라벨이다.
+
+  // 컨테이너 이름이 곧 서비스 이름이다 (backend, ai, frontend).
+  // 파드 이름과 달리 배포해도 바뀌지 않으므로 안정적인 조회 축이 된다.
+  rule {
+    source_labels = ["__meta_docker_container_label_io_kubernetes_container_name"]
+    regex         = "(.+)"
+    target_label  = "service"
+  }
+
+  // 어느 레플리카인지. 한 레플리카만 이상할 때 이 라벨 없이는 구분할 수 없다.
+  // 파드 이름은 배포마다 바뀌어 스트림이 계속 새로 생기는데, 그 비용을 내고
+  // 레플리카 단위 조회를 얻는 거래다. 라벨을 하나 더 늘리기 전에는 이 비용을 따진다.
+  rule {
+    source_labels = ["__meta_docker_container_label_io_kubernetes_pod_name"]
+    regex         = "(.+)"
+    target_label  = "pod"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_io_kubernetes_pod_namespace"]
+    regex         = "(.+)"
+    target_label  = "namespace"
+  }
+
+  // 기존 대시보드의 로그 패널이 {job="docker", stack=~"finch.*"} 로 필터한다.
+  // 파드에는 compose 프로젝트 라벨이 없어 stack 이 비고, 그러면 **파드 로그가
+  // 그 패널에서 조용히 사라진다.** 그래프가 비는 것이 아니라 로그가 덜 나오는
+  // 형태라 알아채기 어렵다. 파드에도 finch 로 시작하는 stack 을 붙여 맞춘다.
+  rule {
+    source_labels = ["__meta_docker_container_label_io_kubernetes_pod_name"]
+    regex         = "(.+)"
+    target_label  = "stack"
+    replacement   = "finch-k8s"
+  }
+
+  // ── 클러스터 밖 (compose) ───────────────────────────────
+  // compose 라벨이 있으면 service 를 덮는다. 파드에는 이 라벨이 없고,
+  // regex "(.+)" 가 빈 값에 걸리지 않으므로 위에서 정한 값이 유지된다.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "(.+)"
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    regex         = "(.+)"
+    target_label  = "stack"
+  }
+
+  // ── 출처 구분 ───────────────────────────────────────────
+  // "파드 로그와 Jenkins 로그가 모두 보이는가" 를 한 라벨로 확인할 수 있게 한다.
+  // 값이 둘뿐이라 카디널리티 비용이 거의 없다.
+  rule {
+    source_labels = ["__meta_docker_container_label_io_kubernetes_pod_name"]
+    regex         = "(.+)"
+    target_label  = "origin"
+    replacement   = "k8s"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    regex         = "(.+)"
+    target_label  = "origin"
+    replacement   = "docker"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  labels     = { job = "docker" }
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    // 같은 네임스페이스의 Service 라 짧은 이름으로 풀린다.
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+  // 지표(Prometheus external_labels)와 같은 값을 써서 로그와 지표를 같은 축으로
+  // 필터할 수 있게 맞춘다.
+  external_labels = {
+    env = "prod",
+  }
+}

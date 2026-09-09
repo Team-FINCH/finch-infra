@@ -1,0 +1,92 @@
+# Loki — 로그 저장소. 설정은 compose 와 같은 파일을 그대로 쓴다 (files/loki-config.yml).
+# 단일 프로세스 구성이고 파일시스템에 저장하므로 k8s 로 와서 바뀌는 것은 담는 그릇뿐이다.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+data:
+  loki-config.yml: |
+{{ .Files.Get "files/loki-config.yml" | indent 4 }}
+---
+# local-path 프로비저너가 노드의 로컬 디스크에 디렉터리를 만들어 준다 (k3s 기본).
+# 접근 모드가 ReadWriteOnce 라 파드 하나만 붙을 수 있다 — 아래 Recreate 전략의 이유다.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: loki-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.loki.storage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+spec:
+  replicas: 1
+  strategy:
+    # Recreate 여야 한다. RollingUpdate 는 새 파드를 먼저 띄우고 준비되면 옛 파드를
+    # 내리는데, ReadWriteOnce 볼륨은 이미 옛 파드가 물고 있어 새 파드가 마운트에
+    # 실패한다. 그러면 옛 파드가 안 내려가므로 배포가 영구히 멈춘다.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: loki
+  template:
+    metadata:
+      labels:
+        app: loki
+      annotations:
+        checksum/config: {{ .Files.Get "files/loki-config.yml" | sha256sum }}
+    spec:
+      # /loki 하위에 쓰기가 필요하다. local-path 가 만든 디렉터리는 root 소유라
+      # 비루트 사용자로 뜨는 Loki 이미지가 쓸 수 없다. fsGroup 이 볼륨 그룹 소유권을
+      # 넘겨 준다 — 이미지를 root 로 돌리지 않고 푸는 방법이다.
+      securityContext:
+        fsGroup: 10001
+      containers:
+        - name: loki
+          image: {{ .Values.loki.image }}
+          args: ["-config.file=/etc/loki/loki-config.yml"]
+          ports:
+            - containerPort: 3100
+          env:
+            - name: TZ
+              value: Asia/Seoul
+          volumeMounts:
+            - name: config
+              mountPath: /etc/loki/loki-config.yml
+              subPath: loki-config.yml
+              readOnly: true
+            - name: data
+              mountPath: /loki
+          resources:
+            {{- toYaml .Values.loki.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3100
+            # Loki 는 기동 직후 /ready 가 한동안 503 이다. 색인을 읽고 링에 합류할
+            # 때까지 준비되지 않은 것이 맞으므로, 실패 허용치를 넉넉히 준다.
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 12
+      volumes:
+        - name: config
+          configMap:
+            name: loki-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: loki-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+spec:
+  selector:
+    app: loki
+  ports:
+    - port: 3100

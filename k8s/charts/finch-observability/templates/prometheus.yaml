@@ -1,0 +1,132 @@
+# Prometheus — 지표 수집과 저장.
+#
+# 서비스 디스커버리를 쓰려면 API 서버에 물어볼 권한이 필요하다. compose 판에는
+# 없던 부분이다 — 대상 목록이 파일에 있었으므로 아무 권한도 필요하지 않았다.
+# 디스커버리로 바꾸는 대가가 이 RBAC 다.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+---
+# ClusterRole 이어야 한다. Role 은 한 네임스페이스에만 유효한데, 노드는
+# 네임스페이스에 속하지 않는 오브젝트라 Role 로는 볼 수 없다.
+#
+# 읽기만 준다. Prometheus 는 클러스터를 관측할 뿐 바꾸지 않는다.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+  - apiGroups: [""]
+    # nodes/metrics 가 kubelet 의 /metrics 와 /metrics/cadvisor 를 긁을 권한이다.
+    # nodes 만으로는 목록은 보이는데 스크레이프가 401 이 된다 — 대상이 발견되므로
+    # 설정이 맞는 것처럼 보이고, up 지표만 0 으로 남는다.
+    resources: [nodes, nodes/metrics, services, endpoints, pods]
+    verbs: [get, list, watch]
+  - nonResourceURLs: ["/metrics"]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+data:
+  prometheus.yml: |
+{{ .Files.Get "files/prometheus.yml" | indent 4 }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.prometheus.storage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+spec:
+  replicas: 1
+  strategy:
+    # ReadWriteOnce 볼륨이라 Recreate 여야 한다. loki.yaml 의 같은 주석 참고.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+      annotations:
+        checksum/config: {{ .Files.Get "files/prometheus.yml" | sha256sum }}
+    spec:
+      serviceAccountName: prometheus
+      securityContext:
+        # prom/prometheus 이미지는 nobody(65534)로 돈다. local-path 가 만든
+        # 디렉터리는 root 소유라 fsGroup 없이는 TSDB 를 열 수 없다.
+        fsGroup: 65534
+      containers:
+        - name: prometheus
+          image: {{ .Values.prometheus.image }}
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time={{ .Values.prometheus.retention }}
+            # 설정을 다시 읽히려고 파드를 죽이지 않기 위한 것이다.
+            # POST /-/reload 로 반영된다. 다만 ConfigMap 갱신은 위 checksum 으로
+            # 파드를 다시 만들므로, 이 엔드포인트는 수동 확인용이다.
+            - --web.enable-lifecycle
+          ports:
+            - containerPort: 9090
+          env:
+            - name: TZ
+              value: Asia/Seoul
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus/prometheus.yml
+              subPath: prometheus.yml
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+          resources:
+            {{- toYaml .Values.prometheus.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9090
+            periodSeconds: 10
+            # TSDB 를 열 때 기존 블록을 읽으므로 데이터가 쌓이면 기동이 느려진다.
+            failureThreshold: 18
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: prometheus-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090

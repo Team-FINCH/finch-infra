@@ -1,0 +1,92 @@
+# kube-state-metrics — 클러스터 오브젝트의 상태를 지표로 낸다.
+#
+# 왜 필요한가. kubelet 과 cAdvisor 는 "컨테이너가 지금 자원을 얼마나 쓰는가" 를
+# 본다. 그런데 티켓이 요구한 **파드 재시작 횟수**는 자원 사용량이 아니라 API
+# 서버에 기록된 오브젝트의 상태다. 출처가 달라서 둘 중 어느 쪽에도 없다.
+#
+# 이것이 없으면 CrashLoopBackOff 를 지표로 잡을 수 없다. 파드가 반복 재시작해도
+# 자원 지표는 정상으로 보인다 — 죽고 다시 뜨는 동안 자원을 적게 쓰기 때문에
+# 오히려 조용해 보인다.
+#
+# 주요 지표
+#   kube_pod_container_status_restarts_total   재시작 누적
+#   kube_deployment_status_replicas_available  원하는 개수 대비 실제
+#   kube_persistentvolumeclaim_status_phase    PVC 가 Bound 인가
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-state-metrics
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kube-state-metrics
+rules:
+  # 읽기 전용이고, 실제로 지표를 만드는 종류만 나열한다. 와일드카드를 쓰면
+  # Secret 내용까지 읽을 권한이 붙는다 — kube-state-metrics 는 Secret 의 메타데이터만
+  # 필요하지만 list 권한은 값까지 준다.
+  - apiGroups: [""]
+    resources: [nodes, pods, services, resourcequotas, persistentvolumeclaims, namespaces]
+    verbs: [list, watch]
+  - apiGroups: ["apps"]
+    resources: [deployments, daemonsets, statefulsets, replicasets]
+    verbs: [list, watch]
+  - apiGroups: ["batch"]
+    resources: [cronjobs, jobs]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kube-state-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-state-metrics
+subjects:
+  - kind: ServiceAccount
+    name: kube-state-metrics
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-state-metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kube-state-metrics
+  template:
+    metadata:
+      labels:
+        app: kube-state-metrics
+    spec:
+      serviceAccountName: kube-state-metrics
+      containers:
+        - name: kube-state-metrics
+          image: {{ .Values.kubeStateMetrics.image }}
+          ports:
+            # 8080 이 오브젝트 지표, 8081 이 kube-state-metrics 자신의 상태다.
+            - containerPort: 8080
+              name: http-metrics
+            - containerPort: 8081
+              name: telemetry
+          resources:
+            {{- toYaml .Values.kubeStateMetrics.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8081
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-state-metrics
+spec:
+  selector:
+    app: kube-state-metrics
+  ports:
+    - port: 8080
+      name: http-metrics

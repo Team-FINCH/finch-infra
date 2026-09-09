@@ -1,0 +1,81 @@
+# Alloy — 로그 수집기. DaemonSet 이다.
+#
+# 왜 DaemonSet 인가
+#   로그는 컨테이너가 뜬 노드의 디스크에 있다. Deployment 로 두면 파드가 어느 한
+#   노드에만 있어 다른 노드의 로그를 못 읽는다. DaemonSet 은 노드가 늘 때마다
+#   자동으로 하나씩 배치한다 — 지금은 단일 노드라 결과가 같지만, 노드를 늘리는
+#   순간 설정을 고쳐야 하는 형태로 두지 않는다.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alloy-config
+data:
+  config.alloy: |
+{{ .Files.Get "files/alloy-config.alloy" | indent 4 }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: alloy
+spec:
+  selector:
+    matchLabels:
+      app: alloy
+  template:
+    metadata:
+      labels:
+        app: alloy
+      annotations:
+        checksum/config: {{ .Files.Get "files/alloy-config.alloy" | sha256sum }}
+    spec:
+      # 도커 소켓은 root 소유(root:docker, 660)다. 컨테이너 안에서 도커 그룹 GID 를
+      # 맞추는 방법도 있지만 GID 가 호스트마다 다르고, 소켓을 읽는 것 외에 하는 일이
+      # 없어 root 로 둔다. **소켓 접근 권한은 도커 데몬 전체 권한과 같다** —
+      # 이 파드가 뚫리면 노드의 모든 컨테이너를 조작할 수 있다.
+      # 그래서 Alloy 는 로그를 읽어 보내는 일만 하고 다른 것을 붙이지 않는다.
+      securityContext:
+        runAsUser: 0
+      containers:
+        - name: alloy
+          image: {{ .Values.alloy.image }}
+          args:
+            - run
+            - --storage.path=/var/lib/alloy/data
+            - /etc/alloy/config.alloy
+          env:
+            - name: TZ
+              value: Asia/Seoul
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy/config.alloy
+              subPath: config.alloy
+              readOnly: true
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+            # 도커가 로그 파일을 두는 곳. 소켓 API 로 읽더라도 데몬이 이 경로의
+            # 파일을 읽어 주는 구조라, 경로가 없으면 로그가 오지 않는다.
+            - name: docker-lib
+              mountPath: /var/lib/docker
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/alloy/data
+          resources:
+            {{- toYaml .Values.alloy.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: alloy-config
+        - name: docker-sock
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
+        - name: docker-lib
+          hostPath:
+            path: /var/lib/docker
+            type: Directory
+        # 수집 위치(어디까지 읽었는지)를 담는다. emptyDir 이면 파드가 다시 뜰 때
+        # 위치를 잃어 로그가 중복되거나 빠진다. 노드 경로에 둔다.
+        - name: data
+          hostPath:
+            path: /var/lib/alloy-data
+            type: DirectoryOrCreate

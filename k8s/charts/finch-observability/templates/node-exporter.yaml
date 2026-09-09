@@ -1,0 +1,55 @@
+# node-exporter — 호스트 자원 지표. DaemonSet 이다.
+#
+# 티켓(FINCH-134)이 옮길 대상으로 적은 것은 넷(Prometheus, Grafana, Loki, Alloy)
+# 인데 이것도 함께 옮겨야 했다. compose 의 node-exporter 는 ports 를 퍼블리시하지
+# 않아 compose 네트워크 안에서만 닿고, 클러스터의 Prometheus 가 긁을 방법이 없다.
+# 두고 가면 대시보드의 CPU, 메모리, 디스크 패널이 빈다 — 완료 판정의
+# "기존 대시보드가 데이터를 그대로 그린다" 가 여기서 깨진다.
+#
+# DaemonSet 인 이유는 Alloy 와 같다. 지표의 출처가 노드이므로 노드마다 하나씩 있어야 한다.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+spec:
+  selector:
+    matchLabels:
+      app: node-exporter
+  template:
+    metadata:
+      labels:
+        app: node-exporter
+    spec:
+      # 호스트의 프로세스와 네트워크를 봐야 한다. 컨테이너 이름공간 안에서는
+      # 자기 자신만 보이므로 노드 지표가 나오지 않는다.
+      hostPID: true
+      hostNetwork: true
+      # hostNetwork 를 쓰면 파드의 DNS 가 노드 것으로 바뀌어 클러스터 Service 이름이
+      # 풀리지 않는다. node-exporter 는 아무 곳에도 연결하지 않으므로(긁히기만 한다)
+      # 문제가 없지만, 다른 파드에 hostNetwork 를 붙일 때는 이 항목이 필요하다.
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: node-exporter
+          image: {{ .Values.nodeExporter.image }}
+          args:
+            - --path.rootfs=/host
+            # 컨테이너와 쿠버네티스가 만드는 마운트가 수천 개라, 걸러내지 않으면
+            # 파일시스템 지표가 그것들로 뒤덮여 대시보드에서 루트를 찾을 수 없다.
+            - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)
+            - --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|cgroup.?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|mqueue|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$
+          ports:
+            - containerPort: 9100
+          volumeMounts:
+            # 공식 예시는 ro,rslave 를 쓴다. rslave 는 기동 뒤 호스트에서 새로 마운트된
+            # 파일시스템까지 보이게 하는 옵션인데, 호스트 루트가 shared 마운트가 아닌
+            # 환경에서는 기동 자체가 실패한다. 서버 파일시스템 구성이 고정이라
+            # 이득이 없어 단순 읽기 전용으로 둔다 (compose 판과 같은 판단).
+            - name: rootfs
+              mountPath: /host
+              readOnly: true
+          resources:
+            {{- toYaml .Values.nodeExporter.resources | nindent 12 }}
+      volumes:
+        - name: rootfs
+          hostPath:
+            path: /

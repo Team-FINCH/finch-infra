@@ -1,0 +1,136 @@
+# Grafana — 대시보드.
+#
+# 관리자 비밀번호는 Secret 에서 온다. 차트가 만들지 않는다 —
+#   kubectl -n finch-observability create secret generic grafana-admin-secret \
+#     --from-literal=admin-user=admin --from-literal=admin-password='...'
+#
+# 기본값을 두지 않는 것이 핵심이다. Secret 이 없으면 secretKeyRef 가 풀리지 않아
+# 파드가 뜨지 않는다. compose 판의 `${GRAFANA_ADMIN_PASSWORD:?...}` 와 같은 의도로,
+# **설정을 빠뜨린 배포가 admin/admin 으로 뜨는 일을 막는다** (FINCH-99 참고).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+data:
+  datasources.yml: |
+{{ .Files.Get "files/grafana-datasources.yml" | indent 4 }}
+  dashboards.yml: |
+{{ .Files.Get "files/grafana-dashboards.yml" | indent 4 }}
+---
+# 대시보드 JSON 은 별도 ConfigMap 이다. provisioning 과 같은 곳에 두면 Grafana 가
+# 대시보드 디렉터리를 훑을 때 provisioning YAML 까지 읽어 파싱 오류를 낸다.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+data:
+{{- range $path, $_ := .Files.Glob "files/dashboards/*.json" }}
+  {{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.grafana.storage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+spec:
+  replicas: 1
+  strategy:
+    # ReadWriteOnce 볼륨이라 Recreate 여야 한다. loki.yaml 의 같은 주석 참고.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+      annotations:
+        checksum/provisioning: {{ (print (.Files.Get "files/grafana-datasources.yml") (.Files.Get "files/grafana-dashboards.yml")) | sha256sum }}
+        # 대시보드 JSON 이 바뀌면 파드를 다시 만든다. dashboards.yml 의
+        # updateIntervalSeconds 로도 반영되지만, 그 경로는 파일이 실제로 갱신됐을
+        # 때만 동작한다 — ConfigMap 마운트는 갱신되므로 대개 되지만 지연이 있다.
+        checksum/dashboards: {{ toJson (.Files.Glob "files/dashboards/*.json") | sha256sum }}
+    spec:
+      securityContext:
+        # grafana 이미지는 uid 472 로 돈다.
+        fsGroup: 472
+      containers:
+        - name: grafana
+          image: {{ .Values.grafana.image }}
+          ports:
+            - containerPort: 3000
+          env:
+            - name: TZ
+              value: Asia/Seoul
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin-secret
+                  key: admin-user
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin-secret
+                  key: admin-password
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+          volumeMounts:
+            - name: provisioning-datasources
+              mountPath: /etc/grafana/provisioning/datasources/datasources.yml
+              subPath: datasources.yml
+              readOnly: true
+            - name: provisioning-dashboards
+              mountPath: /etc/grafana/provisioning/dashboards/dashboards.yml
+              subPath: dashboards.yml
+              readOnly: true
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/grafana
+          resources:
+            {{- toYaml .Values.grafana.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            periodSeconds: 10
+            failureThreshold: 12
+      volumes:
+        # 같은 ConfigMap 을 두 번 마운트한다. subPath 를 쓰므로 각 파일이 자기
+        # 경로에만 놓이고, 그 디렉터리의 다른 파일은 가려지지 않는다.
+        - name: provisioning-datasources
+          configMap:
+            name: grafana-provisioning
+        - name: provisioning-dashboards
+          configMap:
+            name: grafana-provisioning
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+        - name: data
+          persistentVolumeClaim:
+            claimName: grafana-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+spec:
+  selector:
+    app: grafana
+  ports:
+    - port: 3000

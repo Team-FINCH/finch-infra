@@ -1,0 +1,180 @@
+# Prometheus scrape 설정 (쿠버네티스판).
+#
+# compose 판과 무엇이 다른가
+#   compose 에서는 대상을 컨테이너 이름으로 적었다 — finch-backend:8080.
+#   컨테이너 이름이 고정이라 그것으로 충분했다.
+#
+#   쿠버네티스에서는 성립하지 않는다. 파드는 배포마다 새로 만들어지고 이름과 IP 가
+#   함께 바뀐다. 대상 목록을 파일에 적어 두면 첫 배포 직후부터 틀린 주소를 긁는다.
+#   그래서 **서비스 디스커버리**로 바꾼다 — Prometheus 가 API 서버에 "지금 어떤
+#   파드가 있는가" 를 물어 대상 목록을 매번 다시 만든다.
+#
+# job 이름을 왜 유지하는가
+#   기존 대시보드가 job="backend" 로 4개 패널을 그린다. 애노테이션 기반 범용 job
+#   하나로 묶으면 job 이름이 kubernetes-pods 가 되어 **그 패널이 전부 빈다.**
+#   그래서 서비스별로 job 을 따로 두고 이름을 그대로 쓴다. 대상을 찾는 방법만
+#   바뀌고 결과 라벨은 이관 전과 같다.
+#
+# 검증:
+#   docker run --rm --entrypoint promtool -v $PWD/prometheus.yml:/p.yml \
+#     prom/prometheus:v3.1.0 check config /p.yml
+
+global:
+  # 15초. 더 짧게 하면 저장량이 비례해서 늘고, 더 길면 부하 테스트 중
+  # 짧은 스파이크를 놓친다 (FINCH-58 과 62 가 이 해상도에 의존한다).
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    env: prod
+    project: finch
+
+scrape_configs:
+  # Prometheus 자신. 수집기가 죽으면 다른 모든 지표가 함께 사라지므로 먼저 본다.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # ── Spring Boot ────────────────────────────────────────────
+  # micrometer 가 /actuator/prometheus 로 노출한다. Ingress 경유로 가면 actuator 가
+  # 루트에 있어 404 가 난다 (FINCH-111 에서 스모크 테스트가 같은 이유로 실패했다).
+  # 파드 IP 로 직접 간다.
+  - job_name: backend
+    metrics_path: /actuator/prometheus
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [finch]
+    relabel_configs:
+      # app=backend 라벨이 붙은 파드만 남긴다. keep 을 안 걸면 네임스페이스의
+      # 모든 파드를 8080 으로 긁으려 해서 up=0 대상이 잔뜩 생긴다.
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: keep
+        regex: backend
+      # Ready 가 아닌 파드는 제외한다. 기동 중인 파드를 긁으면 연결 실패가
+      # 지표로 남아, 배포할 때마다 오류 그래프가 튄다.
+      - source_labels: [__meta_kubernetes_pod_ready]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+        replacement: $1:8080
+      # 이관 전 라벨을 유지한다. compose 판에서 static_configs 에 직접 적어 뒀다.
+      - target_label: service
+        replacement: backend
+      # 새로 얻는 축. 레플리카 2개 중 한쪽만 이상할 때 이 라벨 없이는 구분되지 않는다.
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+
+  # ── 호스트 자원 ────────────────────────────────────────────
+  # CPU, 메모리, 디스크. 디스크 잔량이 여기서 나온다 — 백업과 이미지와 로그가 쌓여
+  # 디스크가 차면 컨테이너 지표는 멀쩡한데 서버가 죽는다.
+  #
+  # compose 에 남겨 둘 수 없었다. compose 의 node-exporter 는 포트를 퍼블리시하지
+  # 않아 compose 네트워크 안에서만 닿는다. 클러스터의 Prometheus 가 긁을 수 없고,
+  # 그러면 대시보드의 디스크와 CPU 패널이 빈다. 그래서 DaemonSet 으로 옮겼다.
+  - job_name: node
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [finch-observability]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: keep
+        regex: node-exporter
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+        replacement: $1:9100
+      # role: pod 에서 노드 이름은 __meta_kubernetes_pod_node_name 이다.
+      # role: node 의 __meta_kubernetes_node_name 과 이름이 다르다 — 섞으면
+      # 빈 라벨이 되고, 라벨이 비었다는 것은 그래프에서 잘 보이지 않는다.
+      - source_labels: [__meta_kubernetes_pod_node_name]
+        target_label: node
+
+  # ── Loki 자체 상태 ─────────────────────────────────────────
+  # 로그 수집이 멈춘 것을 로그로 알 수는 없다 — 수집기의 고장은 지표로 봐야 한다.
+  - job_name: loki
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [finch-observability]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: keep
+        regex: loki
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+        replacement: $1:3100
+
+  # ── kubelet ────────────────────────────────────────────────
+  # 노드 에이전트 자신의 지표. 파드를 몇 개 돌리고 있는지, 이미지 pull 이 얼마나
+  # 걸리는지가 여기 있다.
+  #
+  # insecure_skip_verify 를 켜는 이유: kubelet 의 서빙 인증서는 자기 서명이고
+  # 클러스터 CA 가 발급한 것이 아니다. 검증하려면 인증서를 따로 배포해야 하는데,
+  # 대상이 같은 노드의 kubelet 이고 토큰으로 인증하므로 이득이 없다.
+  - job_name: kubelet
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      insecure_skip_verify: true
+    authorization:
+      credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      - action: labelmap
+        regex: __meta_kubernetes_node_label_(.+)
+
+  # ── 컨테이너별 자원 지표 (cAdvisor) ────────────────────────
+  # **이 job 이 compose 에서 못 얻던 것을 되찾는다.**
+  # compose 에서 cAdvisor 컨테이너를 붙였다가 제거했다 — 이 서버의 Docker 스토리지
+  # 드라이버가 overlayfs 라 cAdvisor 가 컨테이너를 식별하지 못했다
+  # (docker-compose.observability.yml 주석 참고).
+  #
+  # kubelet 은 같은 지표를 내장으로 노출한다. 별도 컨테이너가 필요 없고,
+  # 컨테이너 식별은 kubelet 이 자기가 띄운 파드 정보로 하므로 스토리지 드라이버와
+  # 무관하다. container_memory_working_set_bytes, container_cpu_usage_seconds_total 이
+  # 여기서 나온다.
+  - job_name: cadvisor
+    scheme: https
+    metrics_path: /metrics/cadvisor
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      insecure_skip_verify: true
+    authorization:
+      credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      - action: labelmap
+        regex: __meta_kubernetes_node_label_(.+)
+
+  # ── 클러스터 오브젝트 상태 (kube-state-metrics) ────────────
+  # 파드 재시작 횟수, Deployment 의 원하는 개수 대비 실제 개수, PVC 상태.
+  #
+  # kubelet 도 cAdvisor 도 이걸 주지 않는다. 둘은 "지금 컨테이너가 자원을 얼마나
+  # 쓰는가" 를 보고, 재시작 횟수는 "API 서버에 기록된 오브젝트의 상태" 라서
+  # 출처가 다르다. **CrashLoopBackOff 를 지표로 잡는 유일한 경로다.**
+  - job_name: kube-state-metrics
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [finch-observability]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: keep
+        regex: kube-state-metrics
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+        replacement: $1:8080
+
+# ── 아직 없는 대상 ────────────────────────────────────────
+# 1. ai(FastAPI)는 /metrics 를 노출하지 않는다 (2026-09-01 실측: 404).
+#    계측을 넣으려면 ai 파트 코드를 고쳐야 하는데 ADR-0002 상 ai/ 는 AI 파트
+#    소유라 인프라가 임의로 건드리지 않는다. FINCH-187 에서 /health 의
+#    ingest 상태를 json_exporter 로 지표화하는 것이 먼저다.
+#
+# 2. Jenkins 와 gitlab-runner 는 클러스터 밖 Docker 에 남는다(FINCH-39).
+#    로그는 Alloy 가 도커 소켓으로 계속 수집한다. 지표는 Jenkins 에
+#    prometheus 플러그인이 필요하고 그것은 FINCH-137(plugins.txt) 범위다.
+#    **compose 판에도 Jenkins 지표 job 이 없었으므로 이관으로 잃는 것은 없다.**
