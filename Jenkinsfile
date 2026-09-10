@@ -35,6 +35,10 @@ pipeline {
     environment {
         COMPOSE = 'docker compose -f infra/docker-compose.yml --env-file infra/.env'
         NOTIFY_KIND = 'mattermost'
+        // helm·kubectl 을 돌릴 임시 컨테이너의 재료 (FINCH-135).
+        // 왜 Jenkins 안에서 직접 부르지 않는지는 'k8s 배포' 스테이지 주석 참고.
+        JENKINS_CONTAINER = 'finch-jenkins'
+        JENKINS_IMAGE = 'finch/jenkins:latest'
     }
 
     stages {
@@ -168,6 +172,60 @@ pipeline {
                 sh 'curl -fsS --retry 3 --retry-delay 3 http://finch-backend:8080/actuator/health'
             }
         }
+
+        // 커트오버까지 compose 와 k8s 에 함께 배포한다 (FINCH-135).
+        //
+        // 트래픽은 아직 호스트 nginx(80·443)가 받으므로 여기서 helm 만 돌리면 운영이
+        // 갱신되지 않은 채 남는다. 그래서 compose 배포를 지우지 않고 뒤에 덧붙인다.
+        // compose 스모크가 통과한 뒤에 도는 순서라, k8s 가 실패해도 운영은 이미 정상이다.
+        // FINCH-136 에서 80·443 을 넘긴 뒤에 compose 쪽을 뗀다.
+        //
+        // **when 을 걸지 않는다.** 차트만 고친 커밋은 SERVICES 를 세우지 않으므로
+        // 게이트를 걸면 차트 변경이 영원히 배포되지 않는다 — 운영 스크립트 동기화
+        // (FINCH-204)와 같은 함정이다.
+        stage('k8s 배포') {
+            steps {
+                script {
+                    // 태그는 그 파트를 마지막으로 건드린 커밋이다. 매 빌드의 HEAD 를 쓰면
+                    // 문서만 고친 머지에도 파드 전체가 교체된다. 안 바뀐 파트는 태그가
+                    // 그대로라 helm 이 차이를 못 찾고 파드를 건드리지 않는다.
+                    //
+                    // 경로 목록은 '변경 파트 감지' 와 같아야 한다. 어긋나면 이미지는
+                    // 새로 빌드됐는데 태그가 그대로여서 k8s 가 옛 이미지를 계속 쓴다.
+                    def parts = [
+                        [name: 'backend',  image: 'finch/backend',
+                         paths: 'backend/ infra/docker/backend.Dockerfile'],
+                        [name: 'ai',       image: 'finch/ai',
+                         paths: 'ai/ infra/docker/ai.Dockerfile'],
+                        [name: 'frontend', image: 'finch/nginx',
+                         paths: 'frontend/ infra/nginx/ infra/docker/frontend.Dockerfile'],
+                    ]
+
+                    // 클로저(.each) 안에서 sh 를 부르면 CPS 변환과 부딪힐 수 있다.
+                    // 고전적인 for 문이 이 자리에서는 안전한 관용구다.
+                    def sets = []
+                    for (int i = 0; i < parts.size(); i++) {
+                        def p = parts[i]
+                        def tag = sh(script: "git log -1 --format=%h -- ${p.paths}",
+                                     returnStdout: true).trim()
+                        if (!tag) {
+                            error "${p.name} 의 마지막 변경 커밋을 못 구했다. 경로 목록을 확인할 것: ${p.paths}"
+                        }
+                        // compose 가 빌드한 :latest 를 그 커밋 태그로도 가리킨다. 다시 빌드하지
+                        // 않은 파트는 :latest 가 이미 그 커밋의 산출물이라 태그만 붙이면 된다.
+                        sh "docker tag ${p.image}:latest ${p.image}:${tag}"
+                        sets << "--set ${p.name}.image.tag=${tag}"
+                        echo "${p.name} → ${p.image}:${tag}"
+                    }
+
+                    // --atomic: 실패하면 직전 리비전으로 되돌린다. 반쪽 배포로 멈추지 않게 한다.
+                    //           --wait 을 포함하므로 readinessProbe 통과가 성공 판정이다.
+                    helmExec("upgrade --install finch infra/k8s/charts/finch -n finch " +
+                             "--atomic --timeout 5m ${sets.join(' ')}")
+                    kubectlExec('-n finch get deploy -o wide')
+                }
+            }
+        }
     }
 
     post {
@@ -183,6 +241,37 @@ pipeline {
             script { notifyDeploy('복구', '이전 실패 이후 배포가 다시 성공했다.') }
         }
     }
+}
+
+// helm·kubectl 을 임시 컨테이너에서 돌린다 (FINCH-135).
+//
+// Jenkins 컨테이너 안에서 직접 부르면 k8s API 서버에 닿지 못한다. ufw 가 docker0 과
+// cni0 만 허용하는데(Testcontainers 때문에 넣은 규칙) Jenkins 는 compose 네트워크에
+// 있어서 노드 IP·게이트웨이·클러스터 서비스 IP 가 전부 막힌다. 실측으로 확인했다.
+//
+// 기본 브리지에 컨테이너를 띄우면 그 규칙에 걸려 통과한다. Jenkins 가 이미 docker.sock
+// 으로 이미지를 빌드하는 것과 같은 경로다 — 방화벽을 새로 열지 않아도 된다.
+//
+// --volumes-from: 워크스페이스가 같은 경로로 보여 경로 변환이 필요 없다.
+// -w "$PWD":     helm 이 상대 경로를 저장소 이름으로 오해하는 것을 막는다.
+// KUBECONFIG:    k3s 가 만든 파일의 server 는 127.0.0.1 이라 컨테이너에서 쓸 수 없다.
+//                파일을 고치는 대신 --kube-apiserver 로 주소만 바꾼다. API 서버 인증서
+//                SAN 에 노드 IP 가 있어 TLS 검증은 그대로 통과한다.
+def k8sTool(String tool, String serverFlag, String args) {
+    sh """
+        docker run --rm --user root --volumes-from ${env.JENKINS_CONTAINER} -w "\$PWD" \\
+          -v /etc/rancher/k3s/k3s.yaml:/kc:ro -e KUBECONFIG=/kc \\
+          --entrypoint ${tool} ${env.JENKINS_IMAGE} \\
+          ${serverFlag} "\$KUBE_APISERVER" ${args}
+    """
+}
+
+def helmExec(String args) {
+    k8sTool('helm', '--kube-apiserver', args)
+}
+
+def kubectlExec(String args) {
+    k8sTool('kubectl', '--server', args)
 }
 
 // 알림 전송은 배포 결과를 바꾸지 않는다. webhook 이 없거나 실패해도 빌드 판정은 그대로 둔다.
