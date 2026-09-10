@@ -442,6 +442,81 @@ docker run --rm -v $PWD/alloy-config.alloy:/c.alloy grafana/alloy:v1.5.1 fmt /c.
 `GRAFANA_ADMIN_PASSWORD` 가 비어 있으면 Grafana 는 기동을 거부한다.
 설정을 빠뜨린 배포가 `admin/admin` 으로 뜨는 것을 막기 위한 의도적 설계다.
 
+## 운영 스크립트와 정기 작업
+
+### `/srv/FINCH` 의 git 상태는 믿지 마라
+
+`setup-server.sh` 가 저장소를 `/srv/FINCH` 로 클론해 부트스트랩하는데, **그 클론은 갱신되지 않는다.** root 로는 fetch 가 되지 않아(비공개 저장소 자격증명이 없다) `origin/master` 조차 클론한 시점에 멈춰 있다.
+
+실제로 `renew-cert.sh` 가 두 달 뒤에 터질 상태로 방치돼 있었다 — master 에는 TLS Secret 동기화가 들어갔는데 cron 이 부르는 파일에는 없었다(FINCH-204).
+
+그래서 **`infra/scripts/` 와 `infra/k8s/` 두 디렉터리는 배포가 덮어쓴다.**
+
+```
+docker-compose.infra.yml   ${OPS_DIR:-/srv/FINCH}/infra:/opt/ops
+Jenkinsfile                '운영 스크립트 동기화' 스테이지 (when 게이트 없음)
+```
+
+`when` 을 걸지 않은 것이 핵심이다. `infra/scripts/` 만 고친 커밋은 `SERVICES` 를 세우지 않아서, 게이트를 걸면 그 배포에서 스테이지가 건너뛰어지고 문제가 그대로 재현된다.
+
+**그 두 디렉터리를 서버에서 직접 고치지 마라.** 다음 배포가 덮는다. 나머지 파일(`docker-compose*.yml`, `.env` 등)은 배포가 건드리지 않으므로 수동 반영이 맞다 — 특히 `docker-compose.infra.yml` 은 **Jenkins 자신의 정의**라 Jenkins 가 배포할 수 없다. 배포 도구가 자기를 배포하면 도중에 죽는다.
+
+### cron
+
+`setup-server.sh` 가 `/etc/cron.d/` 에 등록한다. `crontab -l` 로는 보이지 않는다 — 별개의 등록처다.
+
+| 시각 | 파일 | 하는 일 |
+| :--- | :--- | :--- |
+| 04:00 | `finch-db-backup` | DB 덤프 |
+| 04:10 | `finch-jenkins-backup` | `jenkins_home` (플러그인 제외) |
+| 04:20 | `finch-cert-renew` | 인증서 갱신 + k8s TLS Secret 동기화 |
+| 04:30 | `finch-image-prune` | dangling 이미지 정리 |
+| 07:00 / 07:30 / 16:30 / 18:40 / 6시간마다 | `finch-ingest` | AI 근거 데이터 적재 (FINCH-179) |
+
+적재는 `ingest-batch.sh <단계>` 이고 단계는 `master`, `market`, `docs`, `news`, `briefing`, `all` 이다. 전역 잠금(`flock`)이 있어 시각이 겹쳐도 뒤엣것이 기다린다.
+
+**대상 종목을 문서가 아니라 DB 에서 만든다** — 이미 적재된 종목과 백엔드 보유·거래 종목의 합집합이다. 시드 목록을 쓰면 시연 계정이 그 밖의 종목을 사는 순간 낡고, 실제로 그 일이 나서 포트폴리오 진단이 통째로 409 였다.
+
+로그는 `/var/log/finch-*.log` 이고 `/etc/logrotate.d/finch` 이 주 1회 4세대로 돌린다. **`su root syslog` 가 있어야 한다** — `/var/log` 가 `root:syslog 775` 라 그 지시자가 없으면 logrotate 가 대상 전부를 건너뛴다. 설정 파일은 놓여 있는데 아무것도 돌지 않는 상태가 된다.
+
+## Jenkins 이미지
+
+`infra/docker/jenkins.Dockerfile` 이 만든다. 베이스는 **움직이는 태그가 아니라 정확한 버전**으로 고정한다(`2.568.2-lts-jdk21`) — `lts` 는 재빌드 시점에 따라 다른 Jenkins 가 나오고 그때 무엇이 바뀌었는지 남지 않는다.
+
+담긴 것은 docker CLI, `kubectl`, `helm`, 그리고 `jenkins-plugins.txt` 의 플러그인 94개다. 플러그인 목록을 갱신하려면 컨테이너에서 뽑아 파일을 덮는다 — 명령은 그 파일 머리에 있다.
+
+`jenkins-plugin-cli` 는 `/usr/share/jenkins/ref/plugins` 에 넣고 Jenkins 는 기동할 때 **`jenkins_home` 에 없는 것만** 복사한다. 그래서 이미지를 바꿔도 지금 볼륨의 플러그인을 덮어쓰지 않는다.
+
+이 고정 덕분에 백업에서 플러그인을 뺐다(159MB → 3.2MB). **되돌려야 하면 `backup-jenkins.sh` 의 `--exclude='./plugins'` 한 줄만 지운다.**
+
+## k8s 배포
+
+앱 계층은 Helm 릴리스 `finch` 가, 상태를 가진 계층은 원시 매니페스트가 관리한다.
+
+```
+infra/k8s/charts/finch/       ai · backend · frontend · ingress      (helm)
+infra/k8s/manifests/          namespace · postgres × 2 · redis · resourcequota  (kubectl apply)
+```
+
+k3s 의 컨테이너 런타임이 docker 라 **로컬에서 빌드한 이미지를 그대로 본다.** 레지스트리가 필요 없고 `imagePullPolicy` 가 `IfNotPresent` 다.
+
+그래서 태그가 중요하다. `:latest` 를 다시 빌드해도 helm 은 값이 그대로라 파드를 바꾸지 않는다. 파이프라인은 **그 파트를 마지막으로 건드린 커밋**을 태그로 준다 — 매 빌드의 HEAD 를 쓰면 문서만 고친 머지에도 파드 전체가 교체되고, 안 바뀐 파트는 태그가 그대로라 helm 이 그냥 넘어간다.
+
+### helm 을 왜 임시 컨테이너에서 부르는가
+
+Jenkins 컨테이너 안에서 직접 부르면 k8s API 서버에 닿지 못한다.
+
+```
+docker run (기본 브리지 docker0)    → 도달
+finch-jenkins (finch-infra_default)   → i/o timeout
+```
+
+ufw 가 `docker0` 과 `cni0` 만 허용하는데(Testcontainers 때문에 넣은 규칙) Jenkins 는 compose 네트워크에 있다. 노드 IP, compose 게이트웨이, docker0 게이트웨이, 클러스터 서비스 IP 가 전부 막힌다.
+
+기본 브리지에 컨테이너를 띄우면 그 규칙에 걸려 통과한다. Jenkins 가 이미 `docker.sock` 으로 이미지를 빌드하는 것과 같은 경로라 **방화벽을 새로 열지 않아도 된다.** `--volumes-from` 이라 워크스페이스가 같은 경로로 보이고, `-w "$PWD"` 가 없으면 helm 이 상대 경로를 저장소 이름으로 오해한다.
+
+kubeconfig 는 읽기 전용 마운트다. k3s 가 만든 파일의 `server` 가 `127.0.0.1` 이라 컨테이너에서는 못 쓰므로, 파일을 고치는 대신 `--kube-apiserver` 로 주소만 바꾼다. API 서버 인증서 SAN 에 노드 IP 가 있어 TLS 검증은 그대로 통과한다. 주소는 `infra/.env` 의 `KUBE_APISERVER` 다.
+
 ## 남은 작업 (초안 상태)
 
 - [ ] `docker/backend.Dockerfile` — backend 파트가 `build.gradle`·`gradlew` 커밋 후 동작. Java 버전 확인
