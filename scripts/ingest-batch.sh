@@ -35,6 +35,8 @@ NEWS_DAYS=${NEWS_DAYS:-2}
 LOCK_FILE=${LOCK_FILE:-/var/lock/finch-ingest.lock}
 LOCK_WAIT=${LOCK_WAIT:-1800}
 
+. "$(dirname "$0")/notify-lib.sh"
+
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 psql_in() {
@@ -129,6 +131,13 @@ main() {
             exit 2
             ;;
     esac
+
+    # 실패하면 Mattermost 로 알린다 (FINCH-216). 사용법 검사 뒤에 거는 이유는
+    # 인자를 잘못 준 수동 실행까지 경보로 올리지 않기 위해서다 — 크론의 인자는 고정이다.
+    #
+    # 이름에 단계를 넣는다. 같은 실패가 이어질 때 한 번만 알리는 장치가 이름 단위로
+    # 도는데, 이름을 하나로 두면 market 이 실패한 동안 docs 실패가 묻힌다.
+    notify_on_failure "적재 배치 (${step})"         "sudo /srv/FINCH/infra/scripts/ingest-batch.sh ${step}, 로그는 /var/log/finch-ingest.log"
 
     mkdir -p "$(dirname "$LOCK_FILE")"
     exec 9>"$LOCK_FILE"

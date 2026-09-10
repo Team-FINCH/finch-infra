@@ -9,6 +9,11 @@
 # 매일 돌려도 Let's Encrypt 발급 한도에 걸리지 않는다.
 set -euo pipefail
 
+# 실패하면 Mattermost 로 알린다 (FINCH-216). 이 두 줄이 없으면 실패가
+# 로그에만 남는다.
+. "$(dirname "$0")/notify-lib.sh"
+notify_on_failure "인증서 갱신" "sudo /srv/FINCH/infra/scripts/renew-cert.sh, 로그는 /var/log/finch-cert.log"
+
 DOMAIN="${DOMAIN:-finchapp.org}"
 WEBROOT="${WEBROOT:-/var/www/certbot}"
 EMAIL="${CERTBOT_EMAIL:-}"
