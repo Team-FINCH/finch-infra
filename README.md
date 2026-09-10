@@ -236,6 +236,7 @@ http://localhost/  301        http://[::1]/            000
 | `X-Content-Type-Options` | `nosniff` | 브라우저가 Content-Type 을 추측해 실행하는 것을 막는다 |
 | `X-Frame-Options` | `SAMEORIGIN` | 외부 페이지가 우리 화면을 iframe 으로 감싸는 클릭재킹을 막는다 |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` | 외부로 나갈 때 경로와 쿼리를 흘리지 않는다 |
+| `Cache-Control` | 경로에 따라 둘 | 번들은 `immutable`, `index.html` 은 `no-cache`. 아래 캐시 절 참고 |
 
 `server_tokens off` 은 `http` 레벨(파일 최상단)에 둔다. 그래야 80 과 443 양쪽에 적용된다.
 없으면 `server: nginx/1.27.5` 로 버전이 나가고, 버전 문자열은 알려진 취약점을 골라
@@ -254,6 +255,35 @@ Jenkins 가 자기 버전을 헤더로 알리는데 프록시가 그대로 통�
 
 `always` 를 붙이는 이유는 별개다. 이것이 없으면 2xx·3xx 응답에만 헤더가 붙고 4xx·5xx 에는
 빠진다. 에러 응답에도 필요하다.
+
+### 캐시 지시자는 두 갈래다 — index.html 과 번들
+
+| 경로 | `Cache-Control` | 이유 |
+|---|---|---|
+| `/assets/*` | `public, max-age=2592000, immutable` | Vite 가 파일명에 내용 해시를 붙인다. 내용이 바뀌면 이름이 바뀌므로 오래 캐시해도 안전하다 |
+| 그 밖(`/`, `/index.html`, `favicon`, `brand/`) | `no-cache` | 이름이 고정이라 캐시하면 새 배포가 안 보인다 |
+
+**`index.html` 에 지시자가 없던 것이 실제 사고였다** (FINCH-217). "배포했는데 옛날 화면이 보인다" 는 제보로 들어왔다.
+
+지시자가 없으면 브라우저가 **휴리스틱으로** 캐시한다(RFC 9111 §4.2.2). 흔한 구현은 `(Date - Last-Modified)` 의 10% 이고, 그 창 안에서는 재검증조차 하지 않는다. 그런데 `index.html` 이 가리키는 번들은 위에서 30일 `immutable` 로 못 박아 뒀다. 그래서 이렇게 된다.
+
+1. 사용자가 페이지를 연다. `index.html` 과 번들이 캐시에 들어간다
+2. 배포가 나간다. 새 `index.html` 은 새 해시의 번들을 가리킨다
+3. 브라우저는 휴리스틱 창 안이라 `index.html` 을 재검증하지 않는다. 옛 `index.html` 을 읽고, 거기 적힌 옛 번들도 캐시에 `immutable` 로 있다
+4. **옛 앱이 조용히 계속 돈다.** 오류도 콘솔 흔적도 없다
+
+**창은 파일이 오래될수록 커진다.** 배포 직후에는 몇 초지만 3일간 배포가 없으면 7시간가량이 된다. 배포가 드물수록 나빠지는 종류의 버그다.
+
+`no-store` 가 아니라 `no-cache` 인 것이 중요하다. `no-store` 는 캐시 자체를 금지해 매번 전체를 다시 받는다. `no-cache` 는 재검증만 요구하고, ETag 가 있어 실측하면 **304 로 끝난다 — 본문 0바이트다.**
+
+```
+$ curl -sI -H 'If-None-Match: "6aa24fd7-2e0"' https://finchapp.org/
+HTTP/2 304
+```
+
+`favicon.svg` 와 `brand/` 도 함께 `no-cache` 가 된다. 이름에 해시가 없어 맞는 처리이고, 비용은 요청당 304 한 번이다.
+
+**이미 옛 `index.html` 을 물고 있는 브라우저는 이 수정으로 즉시 낫지 않는다.** 그 캐시는 지시자 없이 저장된 것이라, 휴리스틱 창이 끝나거나 강제 새로고침(Ctrl+Shift+R)을 해야 새 `index.html` 을 받는다. 고쳐지는 것은 그 이후의 모든 배포다.
 
 ### HSTS 기간을 30일로 둔 이유
 
