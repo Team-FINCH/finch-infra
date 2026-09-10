@@ -7,6 +7,14 @@
 # 기본값을 두지 않는 것이 핵심이다. Secret 이 없으면 secretKeyRef 가 풀리지 않아
 # 파드가 뜨지 않는다. compose 판의 `${GRAFANA_ADMIN_PASSWORD:?...}` 와 같은 의도로,
 # **설정을 빠뜨린 배포가 admin/admin 으로 뜨는 일을 막는다** (FINCH-99 참고).
+#
+# 알림 웹훅 URL 도 Secret 에서 온다 (FINCH-187). 같은 이유로 차트가 만들지 않는다 —
+#   kubectl -n finch-observability create secret generic alert-webhook \
+#     --from-file=url=/etc/finch/notify-webhook
+#
+# 그 파일은 호스트에 600 root 로 두고 git 밖이다. URL 을 가진 사람은 누구나 팀
+# 채널에 글을 쓸 수 있으므로 저장소에 남기지 않는다. Secret 이 없으면 파드가
+# 뜨지 않아, 알림 없이 관측만 도는 상태로 조용히 넘어가지 않는다.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -16,6 +24,8 @@ data:
 {{ .Files.Get "files/grafana-datasources.yml" | indent 4 }}
   dashboards.yml: |
 {{ .Files.Get "files/grafana-dashboards.yml" | indent 4 }}
+  alerting.yml: |
+{{ .Files.Get "files/grafana-alerting.yml" | indent 4 }}
 ---
 # 대시보드 JSON 은 별도 ConfigMap 이다. provisioning 과 같은 곳에 두면 Grafana 가
 # 대시보드 디렉터리를 훑을 때 provisioning YAML 까지 읽어 파싱 오류를 낸다.
@@ -56,7 +66,7 @@ spec:
       labels:
         app: grafana
       annotations:
-        checksum/provisioning: {{ (print (.Files.Get "files/grafana-datasources.yml") (.Files.Get "files/grafana-dashboards.yml")) | sha256sum }}
+        checksum/provisioning: {{ (print (.Files.Get "files/grafana-datasources.yml") (.Files.Get "files/grafana-dashboards.yml") (.Files.Get "files/grafana-alerting.yml")) | sha256sum }}
         # 대시보드 JSON 이 바뀌면 파드를 다시 만든다. dashboards.yml 의
         # updateIntervalSeconds 로도 반영되지만, 그 경로는 파일이 실제로 갱신됐을
         # 때만 동작한다 — ConfigMap 마운트는 갱신되므로 대개 되지만 지연이 있다.
@@ -83,6 +93,13 @@ spec:
                 secretKeyRef:
                   name: grafana-admin-secret
                   key: admin-password
+            # 알림 컨택트 포인트가 ${ALERT_WEBHOOK_URL} 로 참조한다.
+            # Grafana 는 프로비저닝 파일의 환경변수를 기동 시점에 치환한다.
+            - name: ALERT_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: alert-webhook
+                  key: url
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
             - name: GF_ANALYTICS_REPORTING_ENABLED
@@ -91,6 +108,10 @@ spec:
             - name: provisioning-datasources
               mountPath: /etc/grafana/provisioning/datasources/datasources.yml
               subPath: datasources.yml
+              readOnly: true
+            - name: provisioning-alerting
+              mountPath: /etc/grafana/provisioning/alerting/alerting.yml
+              subPath: alerting.yml
               readOnly: true
             - name: provisioning-dashboards
               mountPath: /etc/grafana/provisioning/dashboards/dashboards.yml
@@ -116,6 +137,9 @@ spec:
           configMap:
             name: grafana-provisioning
         - name: provisioning-dashboards
+          configMap:
+            name: grafana-provisioning
+        - name: provisioning-alerting
           configMap:
             name: grafana-provisioning
         - name: dashboards

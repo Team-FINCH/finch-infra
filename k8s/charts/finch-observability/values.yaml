@@ -79,3 +79,13 @@ nodeExporter:
       memory: 32Mi
     limits:
       memory: 128Mi
+
+# AI 의 /health JSON 을 지표로 바꾸는 어댑터 (FINCH-187).
+# 불리언이 그대로 1/0 이 되는 것을 v0.7.0 에서 실측 확인했다.
+jsonExporter:
+  image: prometheuscommunity/json-exporter:v0.7.0
+  resources:
+    requests:
+      memory: 32Mi
+    limits:
+      memory: 96Mi

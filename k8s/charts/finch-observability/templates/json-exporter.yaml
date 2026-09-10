@@ -1,0 +1,91 @@
+# json-exporter — AI 의 /health JSON 을 Prometheus 지표로 바꾼다 (FINCH-187).
+#
+# 왜 이 컨테이너가 필요한가. 이슈 #48 이 이렇게 났다 — RAG 가 0건인데 아무도
+# 몰랐고 챗봇이 "자료를 찾지 못했습니다" 라고 태연히 답했다. 결국 사람이 챗봇에
+# 질문해 보고 발견했다. MR !151 이 /health 에 적재 상태를 싣게 만들어 감지는
+# 가능해졌는데, 그것을 읽는 것이 없었다.
+#
+# blackbox exporter 로는 안 된다. degraded 여도 HTTP 200 이라 상태코드로 판별할
+# 수 없고 본문의 status 를 봐야 한다 (그 200 이 의도된 이유는 config 파일 주석 참고).
+#
+# 대안으로 AI 앱이 /metrics 를 직접 내는 쪽이 표준이지만, requirements.txt 에
+# prometheus 관련 의존성이 없어 파트 간 의존을 새로 만들게 된다. 발표까지 남은
+# 기간을 보면 인프라 안에서 끝나는 쪽이 안전하다. 여유가 생기면 그쪽으로 옮기고
+# 이 컨테이너를 걷어낸다 — 지금 구조에서 걷어낼 때 지워야 할 것은 이 파일과
+# prometheus.yml 의 ai-health job 둘이다.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: json-exporter-config
+data:
+  config.yml: |
+{{ .Files.Get "files/json-exporter-config.yml" | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: json-exporter
+  labels:
+    app: json-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: json-exporter
+  template:
+    metadata:
+      labels:
+        app: json-exporter
+      annotations:
+        # 설정이 바뀌면 파드를 다시 만든다. ConfigMap 만 갱신하면 exporter 가
+        # 기동 시점에 읽은 설정을 계속 쓰고, 새 모듈이 반영되지 않은 것을
+        # 아무도 모른다 (prometheus 와 grafana 템플릿과 같은 방식).
+        checksum/config: {{ .Files.Get "files/json-exporter-config.yml" | sha256sum }}
+    spec:
+      containers:
+        - name: json-exporter
+          image: {{ .Values.jsonExporter.image }}
+          args:
+            - --config.file=/config/config.yml
+          ports:
+            - containerPort: 7979
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+          resources:
+            {{- toYaml .Values.jsonExporter.resources | nindent 12 }}
+          # /metrics 는 exporter 자신의 지표라 대상과 무관하게 항상 200 이다.
+          # 여기에 /probe 를 쓰면 AI 가 죽었을 때 503 이 되어 exporter 파드가
+          # 재시작 루프에 빠진다 — 감시자가 감시 대상 때문에 죽는 구조가 된다.
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: 7979
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 7979
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: config
+          configMap:
+            name: json-exporter-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: json-exporter
+  labels:
+    app: json-exporter
+spec:
+  selector:
+    app: json-exporter
+  ports:
+    - port: 7979
+      targetPort: 7979
+      name: http

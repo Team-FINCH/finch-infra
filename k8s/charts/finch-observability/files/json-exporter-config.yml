@@ -1,0 +1,48 @@
+# /health 의 JSON 을 Prometheus 지표로 바꾼다 (FINCH-187).
+#
+# 왜 필요한가
+#   AI 의 /health 는 적재 상태를 본문에 싣는데 degraded 여도 HTTP 200 이다.
+#   200 인 것은 의도된 설계다 — /health 가 컨테이너 healthcheck 이기도 해서
+#   비2xx 를 내면 컨테이너가 unhealthy 로 찍히고 depends_on 으로 대기하는
+#   서비스가 못 뜬다. 적재가 비어도 앱 자체는 도니 재시작으로 안 고쳐지는
+#   문제로 스택을 세우는 것이 더 나쁘다.
+#
+#   그래서 상태코드로는 판별할 수 없고 본문의 status 를 봐야 하는데,
+#   Prometheus 는 JSON 을 읽지 못한다. 이 exporter 가 그 사이를 잇는다.
+#
+# 불리언이 그대로 1/0 이 된다 (v0.7.0 실측). 별도 변환이 필요 없다.
+#   {"ingest":{"documents":true,"embeddings":false}}
+#     -> ai_ingest_documents 1
+#     -> ai_ingest_embeddings 0
+#
+# 대상이 죽으면 이 exporter 가 503 을 반환하고 Prometheus 가 스크레이프 실패로
+# 본다 -> up{job="ai-health"} == 0. 즉 "AI 가 안 뜬 것" 과 "적재가 빈 것" 이
+# 다른 지표로 갈린다.
+modules:
+  ai_health:
+    metrics:
+      # 항목별로 나눠야 알림에서 원인이 갈린다 (티켓 완료 판정).
+      #   documents 만 0    적재 실패
+      #   embeddings 만 0   백필 누락      <- 이슈 #48 의 실제 케이스
+      #   price_daily 만 0  시세 배치 실패
+      - name: ai_ingest
+        type: object
+        path: '{.ingest}'
+        help: AI 근거 데이터 적재 상태 (1 있음, 0 비었음)
+        values:
+          documents: '{.documents}'
+          embeddings: '{.embeddings}'
+          price_daily: '{.price_daily}'
+
+      # status 와 model 은 문자열이라 값이 될 수 없다. 라벨로 실어 두면
+      # 대시보드와 알림 본문에서 그대로 쓸 수 있고, 모델을 바꿨을 때
+      # (GitLab #63) 무엇으로 돌고 있는지가 지표에 남는다.
+      - name: ai_health_status
+        type: object
+        path: '{$}'
+        help: /health 의 status 와 model 을 라벨로 싣는다
+        labels:
+          status: '{.status}'
+          model: '{.model}'
+        values:
+          info: 1

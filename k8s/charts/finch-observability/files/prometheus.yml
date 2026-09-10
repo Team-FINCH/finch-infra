@@ -168,11 +168,44 @@ scrape_configs:
         target_label: __address__
         replacement: $1:8080
 
+  # ── AI 적재 상태 ──────────────────────────────────────────
+  # json-exporter 를 거쳐 /health 의 ingest 불리언을 읽는다 (FINCH-187).
+  # blackbox 패턴과 같은 모양이다 — 실제로 긁는 주소는 exporter 이고,
+  # 확인할 대상은 __param_target 으로 넘긴다.
+  #
+  # 이 job 이 up=0 이면 두 경우다. exporter 가 죽었거나, AI 가 응답하지 않아
+  # exporter 가 503 을 냈거나. 둘 다 알아야 하는 상황이라 구분하지 않는다 —
+  # 적재가 비어 있는 것(ai_ingest_* == 0)과는 지표가 갈린다.
+  - job_name: ai-health
+    metrics_path: /probe
+    # 헬스 확인은 초 단위 해상도가 필요 없다. 30초면 배치 실패를 놓치지 않고
+    # AI 에 보내는 요청 수도 줄인다.
+    scrape_interval: 30s
+    params:
+      module: [ai_health]
+    static_configs:
+      # 네임스페이스가 달라 짧은 이름으로는 풀리지 않는다. 앱 차트의 Service 이름이다.
+      #
+      # 이 파일은 .Files.Get 으로 그대로 박히고 tpl 을 거치지 않는다. 그래서
+      # {{ .Values.appNamespace }} 같은 템플릿 문법을 쓸 수 없다 — 다른 job 의
+      # namespaces 도 같은 이유로 finch 를 문자열로 적어 두었다.
+      - targets: ["http://ai.finch.svc.cluster.local:8000/health"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      # instance 를 URL 그대로 두면 알림 본문이 읽기 어려워진다.
+      - target_label: instance
+        replacement: ai
+      - target_label: service
+        replacement: ai
+      - target_label: __address__
+        replacement: json-exporter:7979
+
 # ── 아직 없는 대상 ────────────────────────────────────────
-# 1. ai(FastAPI)는 /metrics 를 노출하지 않는다 (2026-09-01 실측: 404).
-#    계측을 넣으려면 ai 파트 코드를 고쳐야 하는데 ADR-0002 상 ai/ 는 AI 파트
-#    소유라 인프라가 임의로 건드리지 않는다. FINCH-187 에서 /health 의
-#    ingest 상태를 json_exporter 로 지표화하는 것이 먼저다.
+# 1. ai(FastAPI)는 여전히 /metrics 를 노출하지 않는다. 위 ai-health job 이
+#    /health 의 ingest 상태만 json-exporter 로 지표화한 것이고, 요청 수, 지연,
+#    토큰 사용량 같은 앱 내부 지표는 아직 없다. 그것을 얻으려면 ai 파트 코드에
+#    계측이 필요한데 ADR-0002 상 ai/ 는 AI 파트 소유다 (GitLab #51 에서 문의해 뒀다).
 #
 # 2. Jenkins 와 gitlab-runner 는 클러스터 밖 Docker 에 남는다(FINCH-39).
 #    로그는 Alloy 가 도커 소켓으로 계속 수집한다. 지표는 Jenkins 에

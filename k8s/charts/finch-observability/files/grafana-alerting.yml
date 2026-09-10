@@ -1,0 +1,227 @@
+# Grafana 통합 알림을 파일로 선언한다 (FINCH-187).
+#
+# UI 로 만들면 grafana 볼륨에만 남는다. 데이터소스와 대시보드를 같은 이유로
+# 파일에 둔 것과 짝이다 — 파드를 새로 만들어도 항상 같은 상태로 뜬다.
+#
+# 왜 type: slack 인가
+#   Mattermost 의 Incoming Webhook 은 Slack 호환 페이로드를 받는다.
+#   Grafana 의 webhook 타입은 Grafana 자체 JSON 을 보내서 Mattermost 가
+#   본문을 그리지 못하고 알림이 빈 줄로 뜬다. slack 타입은 {text, attachments[]}
+#   를 보내므로 좌측 색 띠와 제목, 필드가 그대로 렌더된다.
+#   실제 대상은 https://<mattermost>/hooks/... 이다.
+#
+# URL 은 여기 적지 않는다
+#   ${ALERT_WEBHOOK_URL} 은 Grafana 가 기동할 때 환경변수로 치환한다.
+#   값은 alert-webhook Secret 에 있고 grafana.yaml 이 env 로 넘긴다.
+#   git 에 URL 이 남으면 그 URL 을 가진 누구나 팀 채널에 글을 쓸 수 있다.
+
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: mattermost
+    receivers:
+      - uid: mattermost-webhook
+        type: slack
+        settings:
+          url: ${ALERT_WEBHOOK_URL}
+          # 채널에서 누가 보낸 것인지 한눈에 보이게 한다. 배포 알림
+          # (Jenkinsfile 의 notifyDeploy)과 같은 웹훅을 쓰므로 이름으로 가른다.
+          username: Finch 관측
+          icon_emoji: ":bar_chart:"
+          # 제목은 알림 이름, 본문은 아래 템플릿이 만든다.
+          title: '{{ template "finch.title" . }}'
+          text: '{{ template "finch.body" . }}'
+        disableResolveMessage: false
+
+# 알림 본문 템플릿.
+#
+# 기본 템플릿은 라벨을 그대로 나열해 사람이 읽기 어렵다. 여기서 정하는 것은
+# 상태, 증상, 조치, 대상, 시각 다섯 줄이다.
+#
+# 트림 마커({{- -}})를 쓰지 않는다. Grafana 11.4 가 그 형태를 거부한다 —
+# 실측하면 프로비저닝이 통째로 실패하고 알림이 아예 안 붙는다.
+#   Failed to provision alerting
+#   error="text templates: [alerting.notifications.templates.invalidFormat]"
+#
+# 이름에 하이픈도 쓰지 않는다. 컨택트 포인트에서 template 이름으로 참조하므로
+# 밑줄로 통일한다.
+templates:
+  - orgId: 1
+    name: finch_notification
+    template: |
+      {{ define "finch.title" }}{{ if eq .Status "firing" }}[경보] {{ else }}[복구] {{ end }}{{ .CommonLabels.alertname }}{{ end }}
+      {{ define "finch.body" }}{{ range .Alerts }}상태  {{ if eq .Status "firing" }}발생{{ else }}해소{{ end }}
+      증상  {{ .Annotations.summary }}
+      조치  {{ .Annotations.runbook }}
+      대상  {{ .Labels.service }}
+      시각  {{ .StartsAt.Format "2006-01-02 15:04:05" }}
+      {{ end }}{{ end }}
+
+policies:
+  - orgId: 1
+    receiver: mattermost
+    # alertname 으로 묶는다. 세 적재 항목이 동시에 비면 알림 셋이 오는데,
+    # 원인이 각각 다르므로(적재 실패, 백필 누락, 시세 배치) 합치지 않는다.
+    group_by: [alertname]
+    # 첫 알림을 30초 늦춘다. 배포 직후 파드가 뜨는 동안 잠깐 뜨는 값에
+    # 반응하지 않게 하는 완충이다.
+    group_wait: 30s
+    group_interval: 5m
+    # 해소되지 않으면 4시간마다 다시 알린다. 더 짧으면 도배가 되고, 더 길면
+    # 하루 지나도 아무도 다시 못 본다.
+    repeat_interval: 4h
+
+groups:
+  - orgId: 1
+    name: ai-health
+    folder: Finch
+    interval: 1m
+    rules:
+      # ── AI 가 응답하지 않는다 ──────────────────────────────
+      - uid: finch-ai-health-down
+        title: AI 헬스 확인 불가
+        condition: reduced
+        for: 3m
+        labels:
+          severity: critical
+          service: ai
+        annotations:
+          summary: /health 를 읽을 수 없다. AI 컨테이너나 json-exporter 가 죽었을 수 있다
+          runbook: kubectl -n finch get pod -l app=ai 와 kubectl -n finch-observability get pod -l app=json-exporter
+        # NoDataState 를 Alerting 으로 둔다. 지표가 아예 안 오는 것이
+        # 이 알림이 잡아야 하는 상황 그 자체다 — OK 로 두면 조용해진다.
+        noDataState: Alerting
+        execErrState: Alerting
+        data:
+          - refId: query
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: query
+              expr: up{job="ai-health"}
+              instant: false
+              range: true
+          - refId: reduced
+            datasourceUid: __expr__
+            model:
+              refId: reduced
+              type: threshold
+              expression: query
+              reducer: last
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+
+      # ── 공시와 뉴스 적재가 비었다 ────────────────────────────
+      - uid: finch-ai-ingest-documents
+        title: AI 공시와 뉴스 적재 없음
+        condition: reduced
+        for: 10m
+        labels:
+          severity: warning
+          service: ai
+        annotations:
+          summary: documents 가 0 이다. 종목 분석과 채팅이 근거 없이 답한다
+          runbook: sudo /srv/FINCH/infra/scripts/ingest-batch.sh docs, 로그는 /var/log/finch-ingest.log
+        noDataState: NoData
+        execErrState: Alerting
+        data:
+          - refId: query
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: query
+              expr: ai_ingest_documents
+              instant: false
+              range: true
+          - refId: reduced
+            datasourceUid: __expr__
+            model:
+              refId: reduced
+              type: threshold
+              expression: query
+              reducer: last
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+
+      # ── 임베딩 백필이 누락됐다 ─────────────────────────────
+      # 이슈 #48 의 실제 케이스다. documents 는 차 있는데 embeddings 가 비면
+      # 검색이 0건이고, 증상이 "적재가 안 됐다" 와 구별되지 않는다.
+      - uid: finch-ai-ingest-embeddings
+        title: AI 임베딩 백필 누락
+        condition: reduced
+        for: 10m
+        labels:
+          severity: warning
+          service: ai
+        annotations:
+          summary: embeddings 가 0 이다. 문서는 있어도 검색이 0건으로 나온다
+          runbook: docker exec finch-ai python -m app.rag.search --backfill
+        noDataState: NoData
+        execErrState: Alerting
+        data:
+          - refId: query
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: query
+              expr: ai_ingest_embeddings
+              instant: false
+              range: true
+          - refId: reduced
+            datasourceUid: __expr__
+            model:
+              refId: reduced
+              type: threshold
+              expression: query
+              reducer: last
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+
+      # ── 시세 배치가 실패했다 ───────────────────────────────
+      - uid: finch-ai-ingest-price
+        title: AI 시세 적재 없음
+        condition: reduced
+        for: 10m
+        labels:
+          severity: warning
+          service: ai
+        annotations:
+          summary: price_daily 가 0 이다. 포트폴리오 진단이 409 로 끊긴다
+          runbook: sudo /srv/FINCH/infra/scripts/ingest-batch.sh market
+        noDataState: NoData
+        execErrState: Alerting
+        data:
+          - refId: query
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: query
+              expr: ai_ingest_price_daily
+              instant: false
+              range: true
+          - refId: reduced
+            datasourceUid: __expr__
+            model:
+              refId: reduced
+              type: threshold
+              expression: query
+              reducer: last
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
