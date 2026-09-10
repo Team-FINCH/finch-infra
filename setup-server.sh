@@ -159,11 +159,17 @@ chmod 644 /etc/cron.d/finch-cert-renew
 # 사람이 기억해서 돌리는 구조로 두면 이슈 #48(RAG 0건) 이 그대로 재발한다.
 # 단계를 쪼갠 것은 실패 지점을 좁히기 위해서다 — 뉴스가 죽어도 시세는 들어온다.
 # 시각이 겹쳐도 전역 잠금이 있어 뒤엣것이 기다린다 (ingest-batch.sh 주석 참고).
+#
+# market 만 장중(평일 09~16시) 매시 돈다. 시연 계정이 새 종목을 사면 그 종목의 시세가
+# 없어 포트폴리오 진단이 409 인데, 하루 한 번이면 그 창이 여섯 시간 반이다
+# (FINCH-214). 37종에 10초 안팎이라 매시로 돌려도 비용이 거의 없다.
+# 16:30 것은 장 마감 후 확정값을 받는 자리라 그대로 둔다.
 echo "▶ AI 근거 데이터 적재 cron 등록"
 cat > /etc/cron.d/finch-ingest <<CRON
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 0 7 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh master >> /var/log/finch-ingest.log 2>&1
 30 7 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh briefing >> /var/log/finch-ingest.log 2>&1
+5 9-16 * * 1-5 root ${APP_DIR}/infra/scripts/ingest-batch.sh market >> /var/log/finch-ingest.log 2>&1
 30 16 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh market >> /var/log/finch-ingest.log 2>&1
 40 18 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh docs >> /var/log/finch-ingest.log 2>&1
 0 0,6,12,18 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh news >> /var/log/finch-ingest.log 2>&1
