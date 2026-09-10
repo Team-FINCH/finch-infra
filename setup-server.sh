@@ -154,6 +154,45 @@ cat > /etc/cron.d/finch-cert-renew <<CRON
 CRON
 chmod 644 /etc/cron.d/finch-cert-renew
 
+# ── AI 근거 데이터 적재 cron ─────────────────────────────
+# 한 번 적재하면 그 시점 데이터로 굳는다. 시세·공시·뉴스는 매일 갱신돼야 하고,
+# 사람이 기억해서 돌리는 구조로 두면 이슈 #48(RAG 0건) 이 그대로 재발한다.
+# 단계를 쪼갠 것은 실패 지점을 좁히기 위해서다 — 뉴스가 죽어도 시세는 들어온다.
+# 시각이 겹쳐도 전역 잠금이 있어 뒤엣것이 기다린다 (ingest-batch.sh 주석 참고).
+echo "▶ AI 근거 데이터 적재 cron 등록"
+cat > /etc/cron.d/finch-ingest <<CRON
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+0 7 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh master >> /var/log/finch-ingest.log 2>&1
+30 7 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh briefing >> /var/log/finch-ingest.log 2>&1
+30 16 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh market >> /var/log/finch-ingest.log 2>&1
+40 18 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh docs >> /var/log/finch-ingest.log 2>&1
+0 0,6,12,18 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh news >> /var/log/finch-ingest.log 2>&1
+CRON
+chmod 644 /etc/cron.d/finch-ingest
+
+# ── 호스트 로그 로테이션 ─────────────────────────────────
+# 위 cron 들이 /var/log/finch-*.log 에 계속 덧붙이는데 상한이 없었다. 컨테이너 로그에는
+# max-size 를 걸어 뒀지만(docker-compose.yml) 호스트 로그는 무방비였다.
+# 적재 로그는 하루 7회 실행이라 가장 빨리 자란다.
+#
+# su 가 없으면 로테이션이 통째로 건너뛰어진다. /var/log 가 root:syslog 775 라
+# logrotate 가 "부모 디렉터리 권한이 안전하지 않다" 며 대상 전부를 건너뛰고,
+# 설정 파일은 놓여 있는데 아무것도 돌지 않는 상태가 된다.
+echo "▶ finch 호스트 로그 로테이션 등록"
+cat > /etc/logrotate.d/finch <<'ROTATE'
+/var/log/finch-*.log {
+    su root syslog
+    weekly
+    rotate 4
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+ROTATE
+chmod 644 /etc/logrotate.d/finch
+
 echo
 echo "✓ 서버 세팅 완료. 다음 단계:"
 echo "  1. 보안그룹(EC2 콘솔)에서 22, 80, 443 만 개방 (5432·6379 등 DB 포트 금지)"
