@@ -5,6 +5,11 @@
 # 수동 실행: sudo infra/scripts/backup-jenkins.sh
 set -euo pipefail
 
+# 실패하면 Mattermost 로 알린다 (FINCH-216). 이 두 줄이 없으면 실패가
+# 로그에만 남는다.
+. "$(dirname "$0")/notify-lib.sh"
+notify_on_failure "Jenkins 백업" "sudo /srv/FINCH/infra/scripts/backup-jenkins.sh, 로그는 /var/log/finch-backup.log"
+
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/finch}"
 KEEP_DAYS="${KEEP_DAYS:-7}"
 STAMP="$(date +%Y%m%d-%H%M%S)"

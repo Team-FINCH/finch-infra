@@ -274,19 +274,49 @@ def kubectlExec(String args) {
     k8sTool('kubectl', '--server', args)
 }
 
+// JSON 문자열 안에서 깨지는 것만 바꾼다. JsonOutput 을 쓰면 샌드박스에서 스크립트
+// 승인이 필요해 파이프라인이 조용히 멈출 수 있으므로 String 메서드만 쓴다.
+def jsonEscape(String s) {
+    return (s ?: '')
+        .replace('\\', '\\\\')
+        .replace('"', '\\"')
+        .replace('\r', '')
+        .replace('\n', '\\n')
+        .replace('\t', '\\t')
+}
+
 // 알림 전송은 배포 결과를 바꾸지 않는다. webhook 이 없거나 실패해도 빌드 판정은 그대로 둔다.
+//
+// 본문 형식은 관측 알림(FINCH-187 의 finch_notification)과 같은 다섯 줄이다.
+// 같은 채널에 두 가지 모양이 섞이면 읽는 사람이 매번 형식을 다시 파악해야 한다.
 def notifyDeploy(String state, String detail) {
     def services = env.SERVICES ?: '없음'
     def branch = env.GIT_BRANCH ?: 'master'
-    def msg = "[Finch 배포 ${state}] ${env.JOB_NAME} #${env.BUILD_NUMBER}" +
-              "\\n브랜치: ${branch} / 대상: ${services}" +
-              "\\n${detail}" +
-              "\\n${env.BUILD_URL}console"
-    def field = (env.NOTIFY_KIND == 'discord') ? 'content' : 'text'
+    def firing = (state == '실패')
+    def stamp = new Date().format('yyyy-MM-dd HH:mm:ss', TimeZone.getTimeZone('Asia/Seoul'))
+    def title = firing ? '[경보] 배포 실패' : '[복구] 배포 정상'
+    def body = "상태  " + (firing ? '발생' : '해소') + "\n" +
+               "증상  ${detail}\n" +
+               "조치  ${env.BUILD_URL}console\n" +
+               "대상  ${services} (${branch} #${env.BUILD_NUMBER})\n" +
+               "시각  ${stamp}"
+
+    // Mattermost 의 Incoming Webhook 은 Slack 호환 페이로드를 받는다. Discord 는
+    // 첨부를 이해하지 못하므로 평문으로 떨어뜨린다.
+    def payload
+    if (env.NOTIFY_KIND == 'discord') {
+        payload = '{"content":"' + jsonEscape(title + "\n" + body) + '"}'
+    } else {
+        payload = '{"username":"Finch 배포","icon_emoji":":rocket:","attachments":[{' +
+                  '"color":"' + (firing ? '#D63232' : '#36A64F') + '",' +
+                  '"title":"' + jsonEscape(title) + '",' +
+                  '"fallback":"' + jsonEscape(title) + '",' +
+                  '"text":"' + jsonEscape(body) + '"}]}'
+    }
 
     try {
         withCredentials([string(credentialsId: 'finch-notify-webhook', variable: 'NOTIFY_HOOK')]) {
-            writeFile file: '.notify.json', text: "{\"${field}\":\"${msg}\"}"
+            writeFile file: '.notify.json', text: payload
             def rc = sh(returnStatus: true, script:
                 'curl -fsS -m 10 -X POST -H "Content-Type: application/json" ' +
                 '--data @.notify.json "$NOTIFY_HOOK" -o /dev/null')

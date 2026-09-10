@@ -176,6 +176,17 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 CRON
 chmod 644 /etc/cron.d/finch-ingest
 
+# ── 알림 웹훅 디렉터리 ───────────────────────────────────
+# 위 cron 들이 실패할 때 Mattermost 로 알린다 (FINCH-216). 스크립트는
+# /etc/finch/notify-webhook 을 읽는데, 그 안에 들어가는 URL 은 시크릿이라
+# 저장소에 둘 수 없다 — URL 을 가진 사람은 누구나 팀 채널에 글을 쓸 수 있다.
+#
+# 그래서 디렉터리만 만들고 파일은 사람이 넣는다. 파일이 없으면 알림만 조용히
+# 건너뛰고 배치는 그대로 돈다 (알림 실패가 배치를 죽이면 더 나쁘다).
+echo "▶ 알림 웹훅 디렉터리 생성 (/etc/finch)"
+install -d -m 700 -o root -g root /etc/finch
+install -d -m 700 -o root -g root /var/lib/finch/notify-state
+
 # ── 호스트 로그 로테이션 ─────────────────────────────────
 # 위 cron 들이 /var/log/finch-*.log 에 계속 덧붙이는데 상한이 없었다. 컨테이너 로그에는
 # max-size 를 걸어 뒀지만(docker-compose.yml) 호스트 로그는 무방비였다.
@@ -207,5 +218,7 @@ echo "  3. infra/.env.example → infra/.env 작성 (DB 비밀번호 등)"
 echo "     ai/.env.example    → infra/ai.env 작성 (AI 외부 API 키)"
 echo "  4. cd ${APP_DIR}/infra && docker compose up -d --build"
 echo "  5. docker compose -f docker-compose.infra.yml up -d --build  (Jenkins·runner)"
+echo "  6. 알림 웹훅 URL 을 /etc/finch/notify-webhook 에 넣을 것 (600 root)"
+echo "     넣지 않으면 배치 실패와 관측 경보가 조용히 건너뛰어진다"
 echo "  ※ docker 그룹 적용을 위해 한 번 재로그인할 것"
 echo "  ※ ufw 는 절대 disable 하지 말 것 (sudo ufw status 로 확인)"

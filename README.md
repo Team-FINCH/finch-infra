@@ -42,7 +42,8 @@
 | `nginx/nginx.conf` | 단일 진입점 라우팅: `/`→정적파일, `/api`→backend, `/jenkins`→Jenkins |
 | `docker/*.Dockerfile` | 파트별 이미지 정의 (파트 디렉터리 소유권을 건드리지 않도록 여기 모음) |
 | `scripts/backup-db.sh` | DB 2종 pg_dump 백업 (cron 이 매일 04:00 실행) |
-| `scripts/restore-db.sh` | 백업 파일로 DB 복원 (서버 이전·롤백용) |
+| `scripts/restore-db.sh` | 백업 파일로 DB 복원 (서버 이전과 롤백용) |
+| `scripts/notify-lib.sh` | 크론 스크립트가 실패했을 때 Mattermost 로 알린다 (아래 알림 절) |
 | `.env.example` | 서버 `.env` 템플릿 — 실제 값은 Jenkins Credentials 에 보관 |
 
 ## 서버 첫 구축 순서
@@ -478,6 +479,45 @@ Jenkinsfile                '운영 스크립트 동기화' 스테이지 (when �
 **대상 종목을 문서가 아니라 DB 에서 만든다** — 이미 적재된 종목과 백엔드 보유·거래 종목의 합집합이다. 시드 목록을 쓰면 시연 계정이 그 밖의 종목을 사는 순간 낡고, 실제로 그 일이 나서 포트폴리오 진단이 통째로 409 였다.
 
 로그는 `/var/log/finch-*.log` 이고 `/etc/logrotate.d/finch` 이 주 1회 4세대로 돌린다. **`su root syslog` 가 있어야 한다** — `/var/log` 가 `root:syslog 775` 라 그 지시자가 없으면 logrotate 가 대상 전부를 건너뛴다. 설정 파일은 놓여 있는데 아무것도 돌지 않는 상태가 된다.
+
+### 알림
+
+**세 곳이 같은 형식으로 한 채널에 보낸다.** 형식이 갈리면 읽는 사람이 매번 다시 파악해야 한다.
+
+| 보내는 것 | 발신자 | 언제 |
+| :--- | :--- | :--- |
+| 관측 경보 (AI 헬스, 적재 상태) | `Finch 관측` | Grafana 알림 규칙 (FINCH-187) |
+| 배포 실패와 복구 | `Finch 배포` | Jenkins `notifyDeploy` |
+| 크론 배치 실패와 복구 | `Finch 배치` | `notify-lib.sh` (FINCH-216) |
+
+본문은 다섯 줄로 고정이다.
+
+```
+[경보] DB 백업 실패
+상태  발생
+증상  backup-db.sh 42행에서 종료 코드 1 (docker exec finch-postgres-ai pg_dump ...)
+조치  sudo /srv/FINCH/infra/scripts/backup-db.sh, 로그는 /var/log/finch-backup.log
+대상  DB 백업
+시각  2026-09-10 04:00:12
+```
+
+**Mattermost 로 보내지만 페이로드는 Slack 형식이다.** Incoming Webhook 이 Slack 호환이라 `attachments` 를 이해한다. Grafana 쪽도 같은 이유로 컨택트 포인트 타입이 `webhook` 이 아니라 `slack` 이다 — `webhook` 은 Grafana 자체 JSON 을 보내서 본문이 빈 줄로 뜬다.
+
+**URL 은 `/etc/finch/notify-webhook` (600 root) 에 두고 저장소에 넣지 않는다.** URL 을 가진 사람은 누구나 팀 채널에 글을 쓸 수 있다. `setup-server.sh` 는 디렉터리만 만들고 파일은 사람이 넣는다.
+
+k8s 쪽 Grafana 는 같은 파일에서 Secret 을 만들어 쓴다.
+
+```
+kubectl -n finch-observability create secret generic alert-webhook   --from-file=url=/etc/finch/notify-webhook
+```
+
+**파일이 없으면 배치는 그대로 돌고 알림만 건너뛴다.** 알림 전송 실패가 배치 판정을 바꾸면 더 나쁘다 — 백업이 성공했는데 알림이 안 갔다는 이유로 실패로 기록되면, 실제 실패와 구별되지 않는다. Grafana 만 예외로 Secret 이 없으면 파드가 뜨지 않는다. 관측만 돌고 알림은 죽어 있는 상태를 조용히 지나가지 않게 한 것이다.
+
+**같은 실패가 이어지는 동안에는 한 번만 보낸다.** `market` 은 장중 매시 도는데 원인이 그대로면 아홉 통이 온다. `/var/lib/finch/notify-state/<이름>` 에 마지막 상태를 두고 전이할 때만 보낸다. 실패한 뒤 처음 성공하면 `[복구]` 가 온다.
+
+이름별로 상태를 가른다. **이름이 한글이라 파일명을 그대로 쓸 수 없어 해시를 붙인다** — 안전한 문자만 남기면 한글이 전부 밑줄이 되어 `DB 백업` 과 `시세 적재` 가 같은 파일을 쓴다.
+
+`ERR` 트랩을 걸 때 **`set -E` 를 함께 켜는 것이 핵심이다.** 대상 스크립트들은 `set -euo pipefail` 이고 `-E` 가 없다. `-E` 가 없으면 **함수 안에서 실패해도 `ERR` 트랩이 걸리지 않는다.** `ingest-batch.sh` 는 전부 `main()` 안에서 도는 구조라 그것을 빼면 알림이 한 번도 오지 않는다. 붙였다고 믿는데 안 오는 것이 안 붙인 것보다 나쁘다.
 
 ## Jenkins 이미지
 
