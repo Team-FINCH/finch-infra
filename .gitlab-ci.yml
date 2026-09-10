@@ -64,13 +64,33 @@ infra:k8s-chart-lint:
         # 잘못된 함수·들여쓰기·존재하지 않는 값 참조를 잡는다.
         helm template "$(basename "$c")" "$c" > /dev/null
       done
+
+infra:shell-lint:
+  image: alpine:3.21
+  # 셸 문법 검사가 infra/k8s 만 보고 있었다. cron 이 root 로 돌리는 infra/scripts/ 는
+  # 검사 대상 밖이라, 그쪽만 고친 커밋은 문법 오류가 있어도 파이프라인이 통과한다
+  # (FINCH-179 에서 적재 배치를 넣으며 발견). 두 경로를 함께 본다.
+  rules:
+    - changes:
+        - infra/scripts/**/*
+        - infra/k8s/**/*
+        - infra/.gitlab-ci.yml
+  script:
+    - apk add --no-cache bash > /dev/null
     - |
       set -e
-      # k8s 설치 스크립트는 서버에서 root 로 도는 것들이라 문법 오류의 비용이 크다.
-      # 셸체크까지는 안 가고 파서 검사만 한다 (의존성 없이 sh 내장으로 된다).
+      # 서버에서 root 로 도는 스크립트라 문법 오류의 비용이 크다.
+      # 셸체크까지는 안 가고 파서 검사만 한다.
       found=0
-      for s in $(find infra/k8s -name '*.sh'); do
-        sh -n "$s" && echo "  문법 OK  $s"
+      for s in $(find infra/scripts infra/k8s -name '*.sh'); do
+        # 셰방이 bash 면 bash 로 파싱한다. dash 로 검사하면 local·pipefail 같은
+        # bash 전용 문법을 오류로 잡아 멀쩡한 스크립트가 떨어진다.
+        if head -1 "$s" | grep -q bash; then
+          bash -n "$s"
+        else
+          sh -n "$s"
+        fi
+        echo "  문법 OK  $s"
         found=$((found + 1))
       done
       # 대상이 0개면 find 경로가 바뀐 것이다. 조용히 통과시키면 검사가 죽은 것을 모른다.
