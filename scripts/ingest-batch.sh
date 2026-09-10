@@ -24,6 +24,11 @@ AI_DB=${AI_DB:-finch-postgres-ai}
 BACKEND_DB=${BACKEND_DB:-finch-postgres-backend}
 
 PRICE_DAYS=${PRICE_DAYS:-7}
+# 이력이 아예 없는 종목에 쓰는 폭. PRICE_DAYS 는 이미 적재된 종목을 이어받는 값이라
+# 새 종목에 그것을 쓰면 며칠치만 들어오고, _common_days() 가 교집합이라 그 한 종목이
+# 포트폴리오 전체를 며칠로 잘라 버린다 (FINCH-214). 400캘린더일이 268거래일이고
+# 위험 지표 요건인 60거래일의 네 배 이상이다.
+BACKFILL_DAYS=${BACKFILL_DAYS:-400}
 DART_DAYS=${DART_DAYS:-7}
 NEWS_DAYS=${NEWS_DAYS:-2}
 
@@ -39,20 +44,34 @@ psql_in() {
     docker exec "$container" psql -U "$user" -d "$db" -tAc "$sql"
 }
 
-resolve_tickers() {
-    local loaded held all
-    loaded=$(psql_in "$AI_DB" "select distinct ticker from price_daily;" || true)
-    held=$(psql_in "$BACKEND_DB" \
-        "select stock_code from holding union select stock_code from trade;" || true)
+_codes() {
+    printf '%s\n' "$1" | tr -d ' \r' | grep -E '^[0-9]{6}$' | sort -u
+}
 
-    all=$(printf '%s\n%s\n' "$loaded" "$held" \
-        | tr -d ' \r' | grep -E '^[0-9]{6}$' | sort -u | paste -sd, -)
+_loaded_codes() {
+    _codes "$(psql_in "$AI_DB" "select distinct ticker from price_daily;" || true)"
+}
+
+_held_codes() {
+    _codes "$(psql_in "$BACKEND_DB" \
+        "select stock_code from holding union select stock_code from trade;" || true)"
+}
+
+resolve_tickers() {
+    local all
+    all=$(printf '%s\n%s\n' "$(_loaded_codes)" "$(_held_codes)" \
+        | grep -E '^[0-9]{6}$' | sort -u | paste -sd, -)
 
     if [ -z "$all" ]; then
         log "✗ 대상 종목을 하나도 못 구했다. DB 접속이나 적재 상태를 확인할 것" >&2
         return 1
     fi
     printf '%s' "$all"
+}
+
+# 백엔드가 들고 있는데 시세가 한 행도 없는 종목. 시연 중 새로 산 것이 여기 잡힌다.
+new_tickers() {
+    comm -23 <(_held_codes) <(_loaded_codes) | paste -sd, -
 }
 
 run_ai() {
@@ -65,8 +84,17 @@ step_master() {
 }
 
 step_market() {
-    local t
+    local t n
     t=$(resolve_tickers)
+
+    # 새 종목을 먼저 전체 이력으로 받는다. 뒤의 증분 호출은 종목별 마지막 적재일
+    # 다음날부터만 받으므로 여기서 받은 것을 다시 긁지 않는다.
+    n=$(new_tickers)
+    if [ -n "$n" ]; then
+        log "신규 종목 $(printf '%s' "$n" | tr ',' '\n' | grep -c .)종 — 전체 이력을 받는다"
+        run_ai ingest.prices --days "$BACKFILL_DAYS" --tickers "$n"
+    fi
+
     log "대상 종목 $(printf '%s' "$t" | tr ',' '\n' | grep -c .)종"
     run_ai ingest.prices --days "$PRICE_DAYS" --tickers "$t"
     run_ai ingest.krx marketcap
