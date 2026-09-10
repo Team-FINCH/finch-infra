@@ -132,6 +132,15 @@ services:
       # 선행 조건: BackendLedgerSource 의 교차 사용자 노출 수정(FINCH-172).
       # 그것이 닫히기 전에 이 값을 backend 로 켜면 사용자 원장이 섞여 나갈 수 있었다.
       LEDGER_SOURCE: backend
+      # 운영에서 쓸 LLM 모델 (GitLab #63). 모델명은 비밀이 아니라 여기 둔다 —
+      # 어느 모델로 도는지 스택 정의만 보면 알 수 있고 되돌리기가 한 줄이다.
+      #
+      # 변수 이름이 LLM_MODEL 인 것이 중요하다. 설정 클래스가 extra="ignore" 라
+      # OPENAI_LLM_MODEL 처럼 틀린 이름은 조용히 버려지고 코드 기본값이 쓰인다.
+      # finch-ai-env 에 그 이름으로 한 줄이 들어 있는데, 값이 코드 기본값과 같아서
+      # 지금까지 드러나지 않았다. 여기 environment 가 env_file 을 덮으므로 그 줄과
+      # 무관하게 이 값이 이긴다.
+      LLM_MODEL: gpt-5.4-nano
     depends_on:
       postgres-ai:
         condition: service_healthy
