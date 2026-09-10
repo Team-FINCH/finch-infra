@@ -116,3 +116,77 @@ infra:k8s-prom-lint:
 
       # 검사 대상은 경로만 바꾼 사본이다. 나머지 구조와 키는 원본과 같다.
       promtool check config "$OUT"
+
+# 아래 셋은 "돌 job 이 없어 파이프라인이 skipped 로 찍히던 경로" 를 덮는다 (FINCH-135).
+#
+# skipped 자체는 정확한 보고인데 리뷰어에게는 "아무것도 검증 안 됨" 과 구별되지 않고,
+# 실제로 검증되지 않은 경우가 있었다 — infra/k8s 가 그랬고(FINCH-206) compose 파일,
+# Dockerfile, Jenkinsfile 이 아직 그 상태였다.
+#
+# 경로만 기존 job 의 changes 에 얹으면 무관한 검사가 초록으로 도는 꼴이라, 그 경로에
+# 실제로 무는 검사를 새로 만든다.
+
+infra:compose-validate:
+  image: docker:27-cli
+  # docker compose config 는 데몬이 필요 없다 — 파싱과 변수 치환만 한다.
+  # .env 를 .env.example 로 만들어 렌더하므로 **example 이 렌더에 충분한지**까지 검사된다.
+  # ${VAR:?...} 를 새로 넣고 .env.example 에 적는 것을 잊으면 여기서 걸린다.
+  rules:
+    - changes:
+        - infra/docker-compose*.yml
+        - infra/.env.example
+        - infra/.gitlab-ci.yml
+  script:
+    - |
+      set -e
+      cp infra/.env.example infra/.env
+      found=0
+      for f in infra/docker-compose*.yml; do
+        # external 네트워크는 런타임에만 확인되므로 config 는 그대로 통과한다.
+        docker compose -f "$f" --env-file infra/.env config > /dev/null
+        echo "  렌더 OK  $f"
+        found=$((found + 1))
+      done
+      if [ "$found" -eq 0 ]; then
+        echo "✗ 검사한 compose 파일이 0개다. 경로를 확인할 것" >&2
+        exit 1
+      fi
+      echo "▶ compose 파일 $found 개 검사"
+
+infra:dockerfile-lint:
+  image: docker:27-cli
+  # buildx 의 내장 검사다. 도구를 새로 들이지 않고 FROM·ENV·복사 규칙 등을 본다.
+  # 데몬이 필요해 러너의 docker.sock 을 쓴다 (config.toml 이 이미 마운트한다).
+  rules:
+    - changes:
+        - infra/docker/**/*
+        - infra/.gitlab-ci.yml
+  script:
+    - |
+      set -e
+      found=0
+      for d in infra/docker/*.Dockerfile; do
+        docker buildx build --check -f "$d" . > /dev/null
+        echo "  검사 OK  $d"
+        found=$((found + 1))
+      done
+      if [ "$found" -eq 0 ]; then
+        echo "✗ 검사한 Dockerfile 이 0개다. 경로를 확인할 것" >&2
+        exit 1
+      fi
+      echo "▶ Dockerfile $found 개 검사"
+
+infra:jenkinsfile-lint:
+  image: groovy:4-jdk21
+  # Jenkinsfile 을 검사하는 job 이 없었다. 문법 오류가 머지되면 전 파트의 배포가 멈추는데
+  # 확인 수단이 "머지하고 다음 배포를 기다린다" 뿐이었다.
+  #
+  # Jenkins 의 선언형 linter 는 로그인이 필요해 CI 에서 쓸 수 없다(익명은 403). 대신
+  # Groovy 파서로 읽는다 — 선언형 파이프라인도 문법상 유효한 Groovy 라 괄호·문자열·
+  # 블록 오류가 잡힌다. 스텝 이름이나 인자가 맞는지는 여기서 알 수 없다. 그건 Jenkins 만 안다.
+  rules:
+    - changes:
+        - Jenkinsfile
+        - infra/.gitlab-ci.yml
+  script:
+    - groovy -e "new GroovyShell().parse(new File('Jenkinsfile')); println '파싱 통과'"

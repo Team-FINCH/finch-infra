@@ -1,5 +1,11 @@
+# check=skip=SecretsUsedInArgOrEnv
 # frontend 빌드 + nginx 서빙 (결정: Nginx가 정적 파일 직접 서빙)
 # 빌드 컨텍스트는 저장소 루트: docker compose 의 context: .. 기준 경로다.
+#
+# 위 skip 은 아래 VITE_KAKAO_REST_API_KEY 때문이다. buildx 가 이름만 보고 비밀값으로
+# 경고하는데, 카카오 OAuth 에서 REST API 키는 authorize URL 의 client_id 로 쓰여
+# 브라우저 주소창에 그대로 노출되는 값이다 (buildKakaoAuthorizeUrl.ts). 설계상 공개다.
+# 진짜 비밀인 client secret 은 프런트에 없고 백엔드가 토큰 교환에만 쓴다 — 확인했다.
 FROM node:20-alpine AS build
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
