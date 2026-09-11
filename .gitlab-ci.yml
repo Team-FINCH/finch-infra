@@ -5,6 +5,22 @@
 #
 # 파트별 CI 는 각 파트 디렉터리가 소유한다 (ADR-0002).
 
+infra:ci-config-loaded:
+  image: alpine:3.21
+  # GitLab이 include 전체를 성공적으로 합성해야 이 job 자체가 생성된다. CI 설정만
+  # 바꾼 MR도 빈 파이프라인으로 skipped 되지 않게 하고 실제 Runner 실행까지 확인한다.
+  rules:
+    - changes:
+        paths:
+          - .gitlab-ci.yml
+          - ai/.gitlab-ci.yml
+          - backend/.gitlab-ci.yml
+          - frontend/.gitlab-ci.yml
+          - infra/.gitlab-ci.yml
+        compare_to: master
+  script:
+    - echo "GitLab CI configuration loaded successfully"
+
 infra:env-contract:
   image: python:3.12-alpine
   # 계약(application.yaml)이나 주입(docker-compose.yml)이 바뀔 때만 돈다.
