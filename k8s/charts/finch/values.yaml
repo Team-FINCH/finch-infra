@@ -56,6 +56,11 @@ ingress:
   backendHosts:
     - swagger.finchapp.org
 
+  jenkins:
+    enabled: true
+    host: 172.26.5.235
+    port: 18080
+
   tls:
     enabled: true
     # 인증서는 호스트 certbot 이 발급하고 sync-tls-secret.sh 가 이 이름으로 Secret 을 만든다.

@@ -36,6 +36,15 @@ spec:
       {{- end }}
       http:
         paths:
+          {{- if .Values.ingress.jenkins.enabled }}
+          - path: /jenkins
+            pathType: Prefix
+            backend:
+              service:
+                name: jenkins-external
+                port:
+                  number: 8080
+          {{- end }}
           - path: /api
             pathType: Prefix
             backend:
@@ -81,6 +90,36 @@ spec:
                 port:
                   number: 8080
     {{- end }}
+{{- if .Values.ingress.jenkins.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins-external
+spec:
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: jenkins-external
+  labels:
+    kubernetes.io/service-name: jenkins-external
+    endpointslice.kubernetes.io/managed-by: finch-helm
+addressType: IPv4
+ports:
+  - name: http
+    protocol: TCP
+    port: {{ .Values.ingress.jenkins.port }}
+endpoints:
+  - addresses:
+      - {{ .Values.ingress.jenkins.host | quote }}
+    conditions:
+      ready: true
+{{- end }}
 {{- if .Values.ingress.acmeChallenge.enabled }}
 ---
 # ACME 챌린지 전용 Ingress.
