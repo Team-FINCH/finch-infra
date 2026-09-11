@@ -17,6 +17,10 @@ metadata:
     {{- if .Values.ingress.tls.enabled }}
     # HTTP 로 온 요청을 HTTPS 로 넘긴다. compose nginx 의 80 -> 443 리다이렉트와 같은 역할.
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # HSTS 는 여기 애노테이션으로 못 정한다 (FINCH-227).
+    #   ingress-nginx 의 HSTS 는 **컨트롤러 ConfigMap 옵션**이고 Ingress 단위
+    #   애노테이션이 없다. 실제로 애노테이션을 넣어 배포해 봤고 값이 안 바뀌었다.
+    #   그래서 infra/k8s/install-ingress-nginx.sh 의 controller.config 에 둔다.
     {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
