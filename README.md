@@ -83,8 +83,8 @@ docker exec -it finch-gitlab-runner gitlab-runner register \
 sudo infra/scripts/tune-gitlab-runner.sh
 ```
 
-Runner는 한 번에 job 하나만 실행하고 각 job은 CPU 1.5개, 메모리 3GB까지 쓴다.
-운영 k3s와 같은 4 vCPU를 공유하므로 CI 두 건이 약 3코어를 동시에 점유하지 않게 한다.
+Runner는 job 두 개를 병렬 실행하고 각 job은 CPU 1개, 메모리 3GB까지 쓴다.
+운영 k3s와 같은 4 vCPU를 공유하므로 CI 처리량을 유지하면서 총 CPU를 2코어로 제한한다.
 `/cache` 볼륨은 Gradle·npm·pip 캐시를 job 사이에 유지한다. Docker 29의 BuildKit과
 Jenkins의 동일 Docker daemon도 이미지 빌드 캐시를 유지하므로 정기 정리에서 build cache를
 무조건 삭제하지 않는다.
