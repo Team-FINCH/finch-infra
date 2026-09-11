@@ -52,6 +52,7 @@ ingress:
   className: nginx
   host: finchapp.org
   additionalHosts:
+    - finchapp.org
     - www.finchapp.org
   backendHosts:
     - swagger.finchapp.org
