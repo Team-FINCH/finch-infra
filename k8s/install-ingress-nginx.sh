@@ -61,7 +61,20 @@ for port in "$HTTP_PORT" "$HTTPS_PORT"; do
   fi
 done
 
-echo "▶ ingress-nginx 설치 (http ${HTTP_PORT}, https ${HTTPS_PORT})"
+# HSTS 를 30일로 맞춘다 (FINCH-227).
+#
+# ingress-nginx 기본값은 max-age=31536000 에 includeSubDomains 까지 붙는다.
+# 우리가 정한 값은 30일이고 이유가 infra/README.md 'HSTS 기간' 절에 있다 —
+# HSTS 는 브라우저가 기억하는 값이라 **인증서 갱신이 실패하면 사용자가 경고를
+# 무시하고 들어갈 수단이 없다. 기간이 곧 사고 시 복구 불가 기간이다.**
+#
+# 한번 브라우저에 박히면 그 기간 동안 되돌릴 수 없다. 커트오버로 1년짜리가
+# 나가면 그 뒤에 무엇을 해도 못 줄인다. 발표가 2주 뒤다.
+#
+# Ingress 애노테이션으로는 안 된다. 컨트롤러 ConfigMap 옵션이다 (실측 확인).
+HSTS_MAX_AGE=${HSTS_MAX_AGE:-2592000}
+
+echo "▶ ingress-nginx 설치 (http ${HTTP_PORT}, https ${HTTPS_PORT}, HSTS ${HSTS_MAX_AGE}초)"
 
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx >/dev/null 2>&1 || true
 helm repo update >/dev/null
@@ -77,6 +90,8 @@ helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
   --set controller.ingressClassResource.default=true \
   --set controller.config.use-forwarded-headers=true \
   --set controller.config.server-tokens=false \
+  --set controller.config.hsts-max-age="$HSTS_MAX_AGE" \
+  --set controller.config.hsts-include-subdomains=false \
   --atomic --timeout 5m
 
 echo

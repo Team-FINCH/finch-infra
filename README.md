@@ -587,6 +587,93 @@ ufw 가 `docker0` 과 `cni0` 만 허용하는데(Testcontainers 때문에 넣은
 
 kubeconfig 는 읽기 전용 마운트다. k3s 가 만든 파일의 `server` 가 `127.0.0.1` 이라 컨테이너에서는 못 쓰므로, 파일을 고치는 대신 `--kube-apiserver` 로 주소만 바꾼다. API 서버 인증서 SAN 에 노드 IP 가 있어 TLS 검증은 그대로 통과한다. 주소는 `infra/.env` 의 `KUBE_APISERVER` 다.
 
+## 커트오버 (80/443 인계)
+
+트래픽을 compose 에서 k3s 로 넘기는 단계다. **전환 작업 전체에서 유일하게 사용자에게 보이고, 유일하게 되돌리기 어렵다.**
+
+제약은 단순하다. **80과 443은 서버당 하나씩이다.** 지금은 compose nginx 가 잡고 있고 ingress-nginx 는 8081/8443 에 있다. 둘 다 가질 수 없다.
+
+```
+finch-nginx                 0.0.0.0:80->80, 0.0.0.0:443->443    docker-proxy
+ingress-nginx-controller   hostPort 8081 / 8443                 DaemonSet
+```
+
+`hostPort` 는 리스닝 소켓이 아니라 **CNI portmap 이 거는 iptables DNAT** 이다. 그래서 `ss -lntp` 에 8081 이 안 보인다. 없는 것이 아니라 방식이 다르다.
+
+### 1. 대조 — 넘기기 전에 두 경로가 같은 답을 하는지 본다
+
+```sh
+sudo infra/scripts/cutover-diff.sh
+```
+
+같은 요청을 기존(443)과 k3s(8443)에 보내 32건을 맞댄다. **읽기만 하고 주문, 충전은 부르지 않는다.** AI 엔드포인트는 인증에서 막혀 GMS 크레딧이 나가지 않는다.
+
+**이 대조가 실제로 둘을 잡았다** (FINCH-227). 넘긴 뒤였으면 사용자가 먼저 겪었을 것들이다.
+
+| 잡힌 것 | 원인 |
+|---|---|
+| `/` 의 `Cache-Control: no-cache` 가 k3s 에만 없었다 | **nginx 설정이 두 벌이다.** MR !200 에서 compose 쪽만 고쳤다 |
+| HSTS 가 30일이 아니라 1년 + `includeSubDomains` | ingress-nginx 기본값이 그렇다 |
+
+**설정이 두 벌이라는 것이 이 단계의 핵심 위험이다.**
+
+```
+compose   infra/nginx/nginx.conf
+k8s       infra/k8s/charts/finch/files/frontend-nginx.conf   (정적 서빙, SPA 폴백)
+          ingress-nginx 컨트롤러 ConfigMap                    (TLS 종단, HSTS)
+```
+
+한쪽만 고치면 **커트오버 순간에 그 수정이 사라진다.** 응답 헤더를 건드릴 때는 두 곳을 함께 본다.
+
+**HSTS 는 Ingress 애노테이션으로 못 정한다.** 컨트롤러 ConfigMap 옵션이다 — 애노테이션을 넣어 배포해 보고 값이 안 바뀌는 것을 확인했다. `infra/k8s/install-ingress-nginx.sh` 의 `controller.config.hsts-max-age` 에 있다.
+
+### 2. 커트오버
+
+```sh
+# 기존 nginx 를 내린다. 이 순간부터 다운타임이 시작된다
+docker compose -f infra/docker-compose.yml stop nginx
+
+# ingress-nginx 를 80/443 으로 옮긴다
+sudo HTTP_PORT=80 HTTPS_PORT=443 infra/k8s/install-ingress-nginx.sh
+```
+
+설치 스크립트가 `helm upgrade --install` 이라 **포트만 바꿔 다시 부르는 것이 커트오버 절차 그 자체다.**
+
+### 3. 관찰
+
+최소 하루. 로그와 지표를 본다.
+
+```sh
+sudo k3s kubectl -n finch get pod
+sudo k3s kubectl -n ingress-nginx logs -l app.kubernetes.io/name=ingress-nginx --tail=50
+```
+
+### 4. 보존 — compose 를 지우지 않는다
+
+**정지 상태로 남긴다.** 시연이 걸린 서비스라 돌아갈 곳을 없애면 안 된다. 디스크는 286GB 남아 있어 아낄 이유도 없다.
+
+## 커트오버 롤백
+
+**되돌리는 방법을 아는 것과 적어 두는 것은 다르다.** 사고는 대개 당황한 상태에서 처리하므로 이 절만 보고 따라 할 수 있어야 한다.
+
+```sh
+# 1. ingress-nginx 를 80/443 에서 비킨다  (약 40초)
+sudo HTTP_PORT=8081 HTTPS_PORT=8443 infra/k8s/install-ingress-nginx.sh
+
+# 2. compose nginx 를 다시 올린다  (약 5초)
+docker compose -f infra/docker-compose.yml start nginx
+
+# 3. 확인
+curl -sI https://finchapp.org/ | head -1
+docker ps --filter name=finch-nginx --format '{{.Status}}'
+```
+
+**순서가 중요하다.** 1번을 건너뛰고 2번을 하면 **80/443 을 ingress 가 아직 잡고 있어 compose nginx 가 기동에 실패한다.** 포트를 먼저 비우고 나서 올린다.
+
+**데이터는 되돌릴 것이 없다.** compose 와 k3s 가 **같은 호스트 볼륨의 PostgreSQL 을 쓰지 않는다** — 각자의 DB 를 갖고 있다. 커트오버 후 k3s 에서 생긴 주문은 compose DB 에 없다. 그래서 **롤백은 "그 사이의 거래를 잃는다" 는 뜻이다.** 관찰 기간에 시연 계정으로만 쓰는 이유가 그것이다.
+
+**되돌린 뒤에 할 일.** 무엇 때문에 되돌렸는지 적고, 대조 스크립트를 다시 돌려 그 항목이 잡히는지 본다. 잡히지 않으면 대조 목록에 그 항목을 추가한다.
+
 ## 남은 작업 (초안 상태)
 
 - [ ] `docker/backend.Dockerfile` — backend 파트가 `build.gradle`·`gradlew` 커밋 후 동작. Java 버전 확인
