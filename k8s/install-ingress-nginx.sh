@@ -80,13 +80,17 @@ helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx >/dev/nul
 helm repo update >/dev/null
 
 # --install 로 재실행에도 안전하게 만든다. 포트를 바꿔 다시 부르는 것이 커트오버 절차다.
+# hostPort 는 기존 도메인의 80/443 진입점이고, ClusterIP Service 는 클러스터 안의
+# cloudflared 가 같은 Ingress 로 들어오는 진입점이다. 둘을 함께 열어 모든 외부
+# 트래픽이 이 컨트롤러의 라우팅 규칙을 거치게 한다.
 helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
   --namespace "$NS" --create-namespace \
   --set controller.kind=DaemonSet \
   --set controller.hostPort.enabled=true \
   --set controller.hostPort.ports.http="$HTTP_PORT" \
   --set controller.hostPort.ports.https="$HTTPS_PORT" \
-  --set controller.service.enabled=false \
+  --set controller.service.enabled=true \
+  --set controller.service.type=ClusterIP \
   --set controller.ingressClassResource.default=true \
   --set controller.config.use-forwarded-headers=true \
   --set controller.config.server-tokens=false \

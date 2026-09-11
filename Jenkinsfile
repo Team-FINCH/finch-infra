@@ -1,4 +1,4 @@
-// CD 파이프라인: master 머지 webhook → 변경 파트 감지 → 해당 이미지만 빌드 → compose up
+// CD 파이프라인: master 머지 webhook → 변경 파트 감지 → 해당 이미지만 빌드 → k3s 배포
 //
 // Jenkins job 설정(최초 1회):
 //   - Pipeline from SCM 으로 이 파일을 지정 (branch: master)
@@ -23,7 +23,7 @@ pipeline {
     agent any
 
     options {
-        disableConcurrentBuilds()   // 배포가 겹치면 compose 가 서로를 덮어쓴다
+        disableConcurrentBuilds()   // 배포가 겹치면 이미지 태그와 Helm revision 이 엇갈린다
         timestamps()
     }
 
@@ -148,38 +148,8 @@ pipeline {
             }
         }
 
-        stage('배포') {
-            when { expression { env.SERVICES } }
-            steps {
-                // 변경된 서비스 컨테이너만 교체 (수 초 다운타임 허용).
-                // --wait: healthcheck 가 healthy 가 될 때까지 기다린다. 컨테이너가 뜨자마자
-                // 죽는 배포가 '성공'으로 기록되는 것을 여기서 차단한다 (healthcheck 없는
-                // 서비스는 기존처럼 started 기준).
-                sh "${COMPOSE} up -d --wait ${env.SERVICES}"
-                sh "${COMPOSE} ps"
-            }
-        }
-
-        stage('스모크 테스트') {
-            when { expression { env.SERVICES } }
-            steps {
-                // Jenkins 는 컨테이너라 localhost 가 호스트가 아니다 — 앱 네트워크(finch_default)에
-                // 붙어 있으므로 컨테이너 이름으로 직접 부른다.
-                // 프런트는 실제 사용자 경로(nginx 경유)로, backend 헬스는 컨테이너 직접 호출로 확인한다.
-                // (actuator 는 /api 아래가 아니라 루트에 있어 nginx 경유로는 404 — EC2 실측.
-                //  nginx 에 actuator 를 노출하는 것은 관리 엔드포인트 공개라 하지 않는다)
-                sh 'curl -fsS -o /dev/null --retry 3 --retry-delay 3 http://finch-nginx/'
-                sh 'curl -fsS --retry 3 --retry-delay 3 http://finch-backend:8080/actuator/health'
-            }
-        }
-
-        // 커트오버까지 compose 와 k8s 에 함께 배포한다 (FINCH-135).
-        //
-        // 트래픽은 아직 호스트 nginx(80·443)가 받으므로 여기서 helm 만 돌리면 운영이
-        // 갱신되지 않은 채 남는다. 그래서 compose 배포를 지우지 않고 뒤에 덧붙인다.
-        // compose 스모크가 통과한 뒤에 도는 순서라, k8s 가 실패해도 운영은 이미 정상이다.
-        // FINCH-136 에서 80·443 을 넘긴 뒤에 compose 쪽을 뗀다.
-        //
+        // 운영 트래픽은 k3s Ingress 하나로 받는다. Compose 는 로컬 이미지 빌드 도구로만
+        // 사용하며 앱 컨테이너를 다시 만들지 않는다.
         // **when 을 걸지 않는다.** 차트만 고친 커밋은 SERVICES 를 세우지 않으므로
         // 게이트를 걸면 차트 변경이 영원히 배포되지 않는다 — 운영 스크립트 동기화
         // (FINCH-204)와 같은 함정이다.
@@ -234,7 +204,7 @@ pipeline {
             sh 'rm -f infra/.env infra/ai.env'
         }
         failure {
-            echo '배포 실패 — docker compose logs <서비스> 로 원인을 확인할 것'
+            echo '배포 실패 — kubectl -n finch get pods, describe deploy 로 원인을 확인할 것'
             script { notifyDeploy('실패', '배포가 실패했다. 서버는 이전 상태로 남아 있다.') }
         }
         fixed {

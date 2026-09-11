@@ -51,6 +51,10 @@ frontend:
 ingress:
   className: nginx
   host: finchapp.org
+  additionalHosts:
+    - www.finchapp.org
+  backendHosts:
+    - swagger.finchapp.org
 
   tls:
     enabled: true

@@ -9,4 +9,6 @@ metadata:
 spec:
   hard:
     requests.memory: 6Gi
-    limits.memory: 8Gi
+    # backend 는 2 replicas, maxSurge 1, limits.memory 1536Mi 다. 정상 상태의
+    # 7Gi 위에 새 Pod 하나를 먼저 띄우려면 8.5Gi가 필요하므로 여유를 둔다.
+    limits.memory: 10Gi
