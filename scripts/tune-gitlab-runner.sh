@@ -2,7 +2,8 @@
 set -euo pipefail
 
 CONTAINER="${RUNNER_CONTAINER:-finch-gitlab-runner}"
-CPUS="${RUNNER_JOB_CPUS:-1.5}"
+CONCURRENCY="${RUNNER_CONCURRENCY:-2}"
+CPUS="${RUNNER_JOB_CPUS:-1.0}"
 MEMORY="${RUNNER_JOB_MEMORY:-3g}"
 
 if docker ps --format '{{.Names}}' | grep -Eq '^runner-.*-project-'; then
@@ -14,11 +15,12 @@ stamp=$(date +%Y%m%d%H%M%S)
 docker exec "$CONTAINER" cp /etc/gitlab-runner/config.toml \
   "/etc/gitlab-runner/config.toml.before-cpu-isolation.${stamp}"
 
-docker exec -e RUNNER_JOB_CPUS="$CPUS" -e RUNNER_JOB_MEMORY="$MEMORY" \
+docker exec -e RUNNER_CONCURRENCY="$CONCURRENCY" -e RUNNER_JOB_CPUS="$CPUS" \
+  -e RUNNER_JOB_MEMORY="$MEMORY" \
   "$CONTAINER" sh -eu -c '
     cfg=/etc/gitlab-runner/config.toml
-    sed -i "s/^concurrent = .*/concurrent = 1/" "$cfg"
-    sed -i "s/^  request_concurrency = .*/  request_concurrency = 1/" "$cfg"
+    sed -i "s/^concurrent = .*/concurrent = $RUNNER_CONCURRENCY/" "$cfg"
+    sed -i "s/^  request_concurrency = .*/  request_concurrency = $RUNNER_CONCURRENCY/" "$cfg"
 
     if grep -q "^    cpus = " "$cfg"; then
       sed -i "s/^    cpus = .*/    cpus = \"$RUNNER_JOB_CPUS\"/" "$cfg"
@@ -38,4 +40,4 @@ docker exec "$CONTAINER" gitlab-runner verify
 docker exec "$CONTAINER" sh -c \
   'grep -E "^(concurrent|  request_concurrency|    cpus|    memory|    volumes)" /etc/gitlab-runner/config.toml'
 
-echo "✓ Runner 격리 적용: concurrent=1, job cpu=${CPUS}, memory=${MEMORY}"
+echo "✓ Runner 격리 적용: concurrent=${CONCURRENCY}, job cpu=${CPUS}, memory=${MEMORY}"
