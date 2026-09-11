@@ -176,6 +176,23 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 CRON
 chmod 644 /etc/cron.d/finch-ingest
 
+# ── AI 외부 API 키 점검 ──────────────────────────────────
+# 키가 비면 적재 배치가 '0건' 으로 조용히 끝난다. 2026-09-09 에 그 상태가
+# 하루 이어졌고, GitLab CI 가 초록이라 원인을 다른 데서 찾았다 —
+# CI 는 CI 변수를 보는데 앱은 컨테이너에 주입된 값을 읽기 때문이다.
+#
+# 그래서 이 검사는 **컨테이너에서** 읽는다 (FINCH-213).
+#
+# 경보로 잇지 않는 것은 중복이라서다. 적재가 비는 증상은 FINCH-187 이
+# ai_ingest_* 로 이미 잡는다. 이 검사가 하는 일은 그때 **원인이 키인지** 를
+# 로그 한 줄로 가려 주는 것이다. 같은 사건에 알림을 두 번 보내지 않는다.
+echo "▶ AI 외부 API 키 점검 cron 등록"
+cat > /etc/cron.d/finch-ai-keys <<CRON
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+50 6 * * * root ${APP_DIR}/infra/scripts/verify-ai-keys.sh >> /var/log/finch-keys.log 2>&1
+CRON
+chmod 644 /etc/cron.d/finch-ai-keys
+
 # ── 알림 웹훅 디렉터리 ───────────────────────────────────
 # 위 cron 들이 실패할 때 Mattermost 로 알린다 (FINCH-216). 스크립트는
 # /etc/finch/notify-webhook 을 읽는데, 그 안에 들어가는 URL 은 시크릿이라
