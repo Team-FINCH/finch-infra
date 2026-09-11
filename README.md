@@ -503,12 +503,58 @@ Jenkinsfile                '운영 스크립트 동기화' 스테이지 (when �
 | 04:20 | `finch-cert-renew` | 인증서 갱신 + k8s TLS Secret 동기화 |
 | 04:30 | `finch-image-prune` | dangling 이미지 정리 |
 | 07:00 / 07:30 / 16:30 / 18:40 / 6시간마다 | `finch-ingest` | AI 근거 데이터 적재 (FINCH-179) |
+| 06:50 | `finch-ai-keys` | AI 외부 API 키 점검 (FINCH-213) |
 
 적재는 `ingest-batch.sh <단계>` 이고 단계는 `master`, `market`, `docs`, `news`, `briefing`, `all` 이다. 전역 잠금(`flock`)이 있어 시각이 겹쳐도 뒤엣것이 기다린다.
 
 **대상 종목을 문서가 아니라 DB 에서 만든다** — 이미 적재된 종목과 백엔드 보유·거래 종목의 합집합이다. 시드 목록을 쓰면 시연 계정이 그 밖의 종목을 사는 순간 낡고, 실제로 그 일이 나서 포트폴리오 진단이 통째로 409 였다.
 
 로그는 `/var/log/finch-*.log` 이고 `/etc/logrotate.d/finch` 이 주 1회 4세대로 돌린다. **`su root syslog` 가 있어야 한다** — `/var/log` 가 `root:syslog 775` 라 그 지시자가 없으면 logrotate 가 대상 전부를 건너뛴다. 설정 파일은 놓여 있는데 아무것도 돌지 않는 상태가 된다.
+
+### AI 외부 데이터 키 검증
+
+`infra/scripts/verify-ai-keys.sh` 가 DART, NAVER, KRX 키 3종(값 4개)이 실제로 유효한지 본다. 매일 06:50 에 돈다 — 07:00 첫 적재 10분 전이다.
+
+**왜 필요한가.** 적재 코드는 키가 틀려도 그 종목을 건너뛰고 **"0건 적재" 로 끝난다**(`ai/app/rag/dart.py:121`). 키 문제와 데이터 없음이 화면에서 구분되지 않는다.
+
+**어디서 읽는가가 이 스크립트의 핵심이다.**
+
+2026-09-09 에 이런 일이 있었다.
+
+```
+master 파이프라인   infra:ai-keys-verify   →  유효     (CI 변수를 검사)
+운영 컨테이너        DART_API_KEY           →  빈 값
+                    NAVER_CLIENT_ID        →  빈 값
+                    NAVER_CLIENT_SECRET    →  빈 값
+
+instruments 0,  price_daily 0,  documents 0,  document_chunks 0
+```
+
+**초록불이 거짓이었다.** 같은 값의 집이 둘인데 검사는 CI 변수만 봤다. 앱이 실제로 읽는 것은 Jenkins 크리덴셜을 거쳐 컨테이너에 주입된 값이다. 그 초록 때문에 원인을 다른 데서 찾느라 하루를 썼다.
+
+그래서 **기본 검사 대상이 배포된 컨테이너다.** 값을 읽는 쪽과 검사하는 쪽이 같아야 한다.
+
+| `AI_KEY_SOURCE` | 읽는 곳 | 쓰는 자리 |
+|---|---|---|
+| `container` (기본) | `$AI_EXEC printenv <KEY>` | cron, 사람이 손으로 |
+| `env` | 이 셸의 환경변수 | GitLab CI job `infra:ai-keys-verify` |
+
+CI job 이 `env` 인 이유는 둘이다. 그 job 의 목적이 **CI 변수 자체**의 유효성이고, 그 alpine 이미지에는 docker CLI 가 없어 `container` 모드가 돌지도 않는다.
+
+`AI_EXEC` 는 커트오버(FINCH-136) 때 한 줄만 바꾸면 되게 뺐다. `ingest-batch.sh` 와 같은 방식이다.
+
+```
+compose   docker exec finch-ai
+k8s       kubectl -n finch exec deploy/ai --
+```
+
+**컨테이너에 못 닿는 것과 키가 빈 것을 구분한다.** 이 구분이 없으면 컨테이너가 죽었을 때 "키 4개가 전부 비었다" 로 보고되고, 사람은 키를 다시 발급받으러 간다. 이 스크립트가 고치려는 사고와 같은 종류다. 그래서 `APP_ENV` 를 먼저 읽어 보고 실패하면 거기서 끊는다.
+
+**값은 절대 출력하지 않는다.** 길이(`len=40`)와 외부 API 응답 코드만 남긴다.
+
+**경보로 잇지 않았다.** 적재가 비는 증상은 관측 경보가 `ai_ingest_*` 로 이미 잡는다(FINCH-187). 이 검사가 하는 일은 그때 **원인이 키인지** 를 로그 한 줄로 가려 주는 것이다. 같은 사건에 알림을 두 번 보내면 둘 다 무시하게 된다.
+
+**판정이 외부 API 장애와 섞이지 않게 했다.** DART 는 키가 틀려도 HTTP 200 에 본문 `status` 코드로 알려 주므로 코드를 갈라서 본다 — `800`(시스템 점검)은 키 문제가 아니라고 명시한다. NAVER 는 개발자센터가 아니라 **NCP API HUB** 라 헤더가 `X-NCP-APIGW-API-KEY-ID` 다(`ai/ingest/news.py:37`). 엔드포인트와 헤더가 앱이 쓰는 것과 같아야 하고, 다르면 멀쩡한 키를 무효로 판정한다.
 
 ### 알림
 

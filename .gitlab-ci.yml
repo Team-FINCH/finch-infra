@@ -43,7 +43,10 @@ infra:ai-keys-verify:
   before_script:
     - apk add --no-cache curl
   script:
-    - sh infra/scripts/verify-ai-keys.sh
+    # 이 job 은 **CI 변수 자체**가 유효한지 본다. 컨테이너 검사는 별개다 —
+    # 스크립트 기본값이 container 로 바뀌었으므로(FINCH-213) 여기서 env 로 고정한다.
+    # 이 alpine 이미지에는 docker CLI 가 없어 container 모드가 돌지도 않는다.
+    - AI_KEY_SOURCE=env sh infra/scripts/verify-ai-keys.sh
 
 infra:k8s-chart-lint:
   image:
