@@ -76,7 +76,9 @@ services:
     #   docker exec -it finch-gitlab-runner gitlab-runner register \
     #     --url https://github.com \
     #     --executor docker --docker-image alpine:latest \
-    #     --docker-volumes /var/run/docker.sock:/var/run/docker.sock
+    #     --docker-volumes /var/run/docker.sock:/var/run/docker.sock \
+    #     --docker-volumes /cache
+    # 등록 뒤 CI job이 없는 시점에 infra/scripts/tune-gitlab-runner.sh 를 실행한다.
 
 volumes:
   jenkins_home:
