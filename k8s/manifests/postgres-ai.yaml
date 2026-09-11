@@ -49,7 +49,12 @@ spec:
               memory: 1Gi
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "$(POSTGRES_USER)", "-d", "$(POSTGRES_DB)"]
+              # Kubernetes exec 배열은 셸 변수 치환을 하지 않는다. 셸을 명시해
+              # Secret에서 주입된 실제 사용자와 DB 이름으로 검사한다.
+              command:
+                - sh
+                - -c
+                - exec pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
             periodSeconds: 5
             timeoutSeconds: 3
   volumeClaimTemplates:
