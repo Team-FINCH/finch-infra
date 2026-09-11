@@ -11,9 +11,11 @@ infra:env-contract:
   # 스크립트 자신의 변경에도 반응해야 파서를 고치다 깨뜨린 것을 잡는다.
   rules:
     - changes:
-        - backend/src/main/resources/application*.yaml
-        - infra/docker-compose.yml
-        - infra/scripts/check-env-contract.py
+        paths:
+          - backend/src/main/resources/application*.yaml
+          - infra/docker-compose.yml
+          - infra/scripts/check-env-contract.py
+        compare_to: master
   script:
     - python3 infra/scripts/check-env-contract.py
 
@@ -30,8 +32,10 @@ infra:ai-keys-verify:
   # 작업 브랜치에서는 스크립트가 '판정 불가' 로 끝난다.
   rules:
     - changes:
-        - infra/scripts/verify-ai-keys.sh
-        - infra/.gitlab-ci.yml
+        paths:
+          - infra/scripts/verify-ai-keys.sh
+          - infra/.gitlab-ci.yml
+        compare_to: master
       allow_failure: true
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - when: manual
@@ -52,8 +56,10 @@ infra:k8s-chart-lint:
   # 그 전에 막아 둔다.
   rules:
     - changes:
-        - infra/k8s/**/*
-        - infra/.gitlab-ci.yml
+        paths:
+          - infra/k8s/**/*
+          - infra/.gitlab-ci.yml
+        compare_to: master
   script:
     - |
       set -e
@@ -72,9 +78,11 @@ infra:shell-lint:
   # (FINCH-179 에서 적재 배치를 넣으며 발견). 두 경로를 함께 본다.
   rules:
     - changes:
-        - infra/scripts/**/*
-        - infra/k8s/**/*
-        - infra/.gitlab-ci.yml
+        paths:
+          - infra/scripts/**/*
+          - infra/k8s/**/*
+          - infra/.gitlab-ci.yml
+        compare_to: master
   script:
     - apk add --no-cache bash > /dev/null
     - |
@@ -106,8 +114,10 @@ infra:k8s-prom-lint:
     entrypoint: [""]
   rules:
     - changes:
-        - infra/k8s/charts/finch-observability/files/prometheus.yml
-        - infra/.gitlab-ci.yml
+        paths:
+          - infra/k8s/charts/finch-observability/files/prometheus.yml
+          - infra/.gitlab-ci.yml
+        compare_to: master
   script:
     - |
       set -e
@@ -153,9 +163,11 @@ infra:compose-validate:
   # ${VAR:?...} 를 새로 넣고 .env.example 에 적는 것을 잊으면 여기서 걸린다.
   rules:
     - changes:
-        - infra/docker-compose*.yml
-        - infra/.env.example
-        - infra/.gitlab-ci.yml
+        paths:
+          - infra/docker-compose*.yml
+          - infra/.env.example
+          - infra/.gitlab-ci.yml
+        compare_to: master
   script:
     - |
       set -e
@@ -179,8 +191,10 @@ infra:dockerfile-lint:
   # 데몬이 필요해 러너의 docker.sock 을 쓴다 (config.toml 이 이미 마운트한다).
   rules:
     - changes:
-        - infra/docker/**/*
-        - infra/.gitlab-ci.yml
+        paths:
+          - infra/docker/**/*
+          - infra/.gitlab-ci.yml
+        compare_to: master
   script:
     - |
       set -e
@@ -206,7 +220,9 @@ infra:jenkinsfile-lint:
   # 블록 오류가 잡힌다. 스텝 이름이나 인자가 맞는지는 여기서 알 수 없다. 그건 Jenkins 만 안다.
   rules:
     - changes:
-        - Jenkinsfile
-        - infra/.gitlab-ci.yml
+        paths:
+          - Jenkinsfile
+          - infra/.gitlab-ci.yml
+        compare_to: master
   script:
     - groovy -e "new GroovyShell().parse(new File('Jenkinsfile')); println '파싱 통과'"
