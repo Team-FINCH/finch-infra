@@ -125,6 +125,11 @@ kubectl apply -f infra/k8s/manifests/
 #    다만 imagePullPolicy 가 IfNotPresent 여야 한다 (:latest 는 기본이 Always 라 레지스트리를 친다).
 helm upgrade --install finch infra/k8s/charts/finch -n finch --atomic --timeout 5m
 
+# 고정 테스트 계정(testUserNo=1)을 한 번 로그인해 생성한 뒤 시연 데이터를 초기화한다.
+kubectl -n finch exec -i statefulset/postgres-backend -- \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < infra/k8s/scripts/seed-demo-account.sql
+
 # 5. Ingress 는 커트오버 때만 (FINCH-133, 136).
 #    Compose nginx 가 80/443 을 놓기 전에는 스크립트가 스스로 거부한다.
 sudo ./infra/k8s/install-ingress-nginx.sh
