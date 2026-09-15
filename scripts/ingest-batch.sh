@@ -4,9 +4,8 @@
 #
 # 단계: master | market | docs | news | briefing | all
 #
-# 실행 대상을 AI_EXEC 로 뽑아 둔 것은 커트오버 때문이다. 지금은 compose 컨테이너를
-# docker exec 로 부르지만 k8s 로 넘어가면 kubectl -n finch exec deploy/ai -- 가 된다.
-# 호출부마다 명령을 박아 두면 그때 스무 군데를 고쳐야 한다.
+# 운영 런타임은 k3s를 우선 자동 감지하고, 없으면 compose로 돌아간다.
+# OPS_RUNTIME=k3s|compose로 명시할 수 있으며 AI_EXEC·AI_DB·BACKEND_DB도 재정의 가능하다.
 #
 # 종목 목록을 문서가 아니라 DB 에서 만든다. 시드 30종은 ai/docs/seed-dataset.md 의
 # 표에 있지만 그 파일은 서버로 배포되지 않고, 무엇보다 시연 계정이 30종 밖 종목을
@@ -19,9 +18,34 @@
 # 한도를 함께 깎고, 백필이 서로의 중간 상태를 보게 된다. 실패시키지 않고 기다린다.
 set -euo pipefail
 
-AI_EXEC=${AI_EXEC:-docker exec finch-ai}
-AI_DB=${AI_DB:-finch-postgres-ai}
-BACKEND_DB=${BACKEND_DB:-finch-postgres-backend}
+OPS_RUNTIME=${OPS_RUNTIME:-auto}
+K8S_NAMESPACE=${K8S_NAMESPACE:-finch}
+
+if [ "$OPS_RUNTIME" = auto ]; then
+    if command -v k3s >/dev/null 2>&1 \
+        && k3s kubectl -n "$K8S_NAMESPACE" get deploy/ai >/dev/null 2>&1; then
+        OPS_RUNTIME=k3s
+    else
+        OPS_RUNTIME=compose
+    fi
+fi
+
+case "$OPS_RUNTIME" in
+    k3s)
+        AI_EXEC=${AI_EXEC:-k3s kubectl -n $K8S_NAMESPACE exec deploy/ai --}
+        AI_DB=${AI_DB:-postgres-ai-0}
+        BACKEND_DB=${BACKEND_DB:-postgres-backend-0}
+        ;;
+    compose)
+        AI_EXEC=${AI_EXEC:-docker exec finch-ai}
+        AI_DB=${AI_DB:-finch-postgres-ai}
+        BACKEND_DB=${BACKEND_DB:-finch-postgres-backend}
+        ;;
+    *)
+        echo "✗ OPS_RUNTIME은 auto, k3s, compose 중 하나여야 한다: $OPS_RUNTIME" >&2
+        exit 2
+        ;;
+esac
 
 PRICE_DAYS=${PRICE_DAYS:-7}
 # 이력이 아예 없는 종목에 쓰는 폭. PRICE_DAYS 는 이미 적재된 종목을 이어받는 값이라
@@ -41,9 +65,16 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 psql_in() {
     local container="$1" sql="$2" user db
-    user=$(docker exec "$container" printenv POSTGRES_USER)
-    db=$(docker exec "$container" printenv POSTGRES_DB)
-    docker exec "$container" psql -U "$user" -d "$db" -tAc "$sql"
+    if [ "$OPS_RUNTIME" = k3s ]; then
+        user=$(k3s kubectl -n "$K8S_NAMESPACE" exec "$container" -- printenv POSTGRES_USER)
+        db=$(k3s kubectl -n "$K8S_NAMESPACE" exec "$container" -- printenv POSTGRES_DB)
+        k3s kubectl -n "$K8S_NAMESPACE" exec "$container" -- \
+            psql -U "$user" -d "$db" -tAc "$sql"
+    else
+        user=$(docker exec "$container" printenv POSTGRES_USER)
+        db=$(docker exec "$container" printenv POSTGRES_DB)
+        docker exec "$container" psql -U "$user" -d "$db" -tAc "$sql"
+    fi
 }
 
 _codes() {
@@ -147,6 +178,7 @@ main() {
     fi
 
     log "=== 적재 시작: $step ==="
+    log "런타임 $OPS_RUNTIME"
     if [ "$step" = all ]; then
         step_master
         step_market

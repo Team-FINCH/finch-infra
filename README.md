@@ -515,7 +515,7 @@ Jenkinsfile                '운영 스크립트 동기화' 스테이지 (when �
 | 07:00 / 07:30 / 16:30 / 18:40 / 6시간마다 | `finch-ingest` | AI 근거 데이터 적재 (FINCH-179) |
 | 06:50 | `finch-ai-keys` | AI 외부 API 키 점검 (FINCH-213) |
 
-적재는 `ingest-batch.sh <단계>` 이고 단계는 `master`, `market`, `docs`, `news`, `briefing`, `all` 이다. 전역 잠금(`flock`)이 있어 시각이 겹쳐도 뒤엣것이 기다린다.
+적재는 `ingest-batch.sh <단계>` 이고 단계는 `master`, `market`, `docs`, `news`, `briefing`, `all` 이다. 전역 잠금(`flock`)이 있어 시각이 겹쳐도 뒤엣것이 기다린다. 실행 시 `deploy/ai` 존재 여부로 k3s를 우선 감지하고, 없으면 compose를 사용한다. 장애 복구처럼 런타임을 고정해야 할 때는 `OPS_RUNTIME=k3s|compose`를 명시한다.
 
 **대상 종목을 문서가 아니라 DB 에서 만든다** — 이미 적재된 종목과 백엔드 보유·거래 종목의 합집합이다. 시드 목록을 쓰면 시연 계정이 그 밖의 종목을 사는 순간 낡고, 실제로 그 일이 나서 포트폴리오 진단이 통째로 409 였다.
 
