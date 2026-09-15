@@ -140,7 +140,7 @@ services:
       # finch-ai-env 에 그 이름으로 한 줄이 들어 있는데, 값이 코드 기본값과 같아서
       # 지금까지 드러나지 않았다. 여기 environment 가 env_file 을 덮으므로 그 줄과
       # 무관하게 이 값이 이긴다.
-      LLM_MODEL: gpt-5.4-nano
+      LLM_MODEL: gpt-5-nano
     depends_on:
       postgres-ai:
         condition: service_healthy
