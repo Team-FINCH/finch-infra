@@ -517,6 +517,14 @@ Jenkinsfile                '운영 스크립트 동기화' 스테이지 (when �
 
 적재는 `ingest-batch.sh <단계>` 이고 단계는 `master`, `market`, `docs`, `news`, `briefing`, `all` 이다. 전역 잠금(`flock`)이 있어 시각이 겹쳐도 뒤엣것이 기다린다. 실행 시 `deploy/ai` 존재 여부로 k3s를 우선 감지하고, 없으면 compose를 사용한다. 장애 복구처럼 런타임을 고정해야 할 때는 `OPS_RUNTIME=k3s|compose`를 명시한다.
 
+`news` 단계는 DB에 남은 과거 종목을 합치지 않고 `Settings.service_tickers`의 확정
+30종목만 수집한다. 기본값은 최근 2일·종목당 최대 20건이며 `NEWS_DAYS`와
+`NEWS_MAX_DOCS`로 조정한다. URL 해시 unique 제약으로 중복 기사는 다시 저장하지 않고,
+신규 청크만 임베딩한다. 모든 기사는 `documents/document_chunks`에서 채팅 검색에
+재사용되고, 종목별 하루 최대 3건의 중요 기사는 `events`로 승격되어 07:30 데일리
+브리핑 배치가 같은 문서와 인용을 재사용한다. 따라서 06:00 뉴스 적재가 07:30 브리핑보다
+항상 먼저 실행되어야 한다.
+
 **대상 종목을 문서가 아니라 DB 에서 만든다** — 이미 적재된 종목과 백엔드 보유·거래 종목의 합집합이다. 시드 목록을 쓰면 시연 계정이 그 밖의 종목을 사는 순간 낡고, 실제로 그 일이 나서 포트폴리오 진단이 통째로 409 였다.
 
 로그는 `/var/log/finch-*.log` 이고 `/etc/logrotate.d/finch` 이 주 1회 4세대로 돌린다. **`su root syslog` 가 있어야 한다** — `/var/log` 가 `root:syslog 775` 라 그 지시자가 없으면 logrotate 가 대상 전부를 건너뛴다. 설정 파일은 놓여 있는데 아무것도 돌지 않는 상태가 된다.

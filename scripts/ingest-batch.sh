@@ -55,6 +55,9 @@ PRICE_DAYS=${PRICE_DAYS:-7}
 BACKFILL_DAYS=${BACKFILL_DAYS:-400}
 DART_DAYS=${DART_DAYS:-7}
 NEWS_DAYS=${NEWS_DAYS:-2}
+# 검색 API 응답 상한. 기존 URL은 DB unique 제약으로 재사용되고 신규 기사만
+# 청크·임베딩 대상이므로, 호출 주기마다 같은 기사를 받아도 중복 비용이 들지 않는다.
+NEWS_MAX_DOCS=${NEWS_MAX_DOCS:-20}
 
 LOCK_FILE=${LOCK_FILE:-/var/lock/finch-ingest.lock}
 LOCK_WAIT=${LOCK_WAIT:-1800}
@@ -142,9 +145,10 @@ step_docs() {
 }
 
 step_news() {
-    local t
-    t=$(resolve_tickers)
-    run_ai ingest.news --tickers "$t" --days "$NEWS_DAYS"
+    # 뉴스는 보유·시세 DB 합집합이 아니라 AI Settings.service_tickers의 확정
+    # 30종목만 수집한다. --tickers를 생략해야 백엔드와 대조하는 단일 서비스
+    # 목록이 적용된다. 저장된 documents/events는 채팅과 브리핑이 함께 재사용한다.
+    run_ai ingest.news --days "$NEWS_DAYS" --max-docs "$NEWS_MAX_DOCS"
     run_ai app.rag.search --backfill
 }
 
