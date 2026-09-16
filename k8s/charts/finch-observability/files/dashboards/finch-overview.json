@@ -1,7 +1,7 @@
 {
   "uid": "finch-overview",
   "title": "FINCH 서비스 개요",
-  "description": "단일 EC2 에 올린 Finch 스택 상태. 호스트 자원(node-exporter) · 백엔드 애플리케이션 지표(micrometer) · 전체 컨테이너 로그(Loki). 컨테이너별 자원 지표는 이 서버의 Docker 스토리지 드라이버(overlayfs) 때문에 cAdvisor 가 동작하지 않아 빠져 있다 — k3s 전환(FINCH-39) 후 kubelet 이 대신 제공한다.",
+  "description": "단일 EC2 에 올린 Finch 스택 상태. 호스트 자원(node-exporter) · 백엔드 애플리케이션 지표(micrometer) · 전체 컨테이너 로그(Loki). 컨테이너별 자원 지표는 이 서버의 Docker 스토리지 드라이버(overlayfs) 때문에 cAdvisor 가 동작하지 않아 빠져 있다 — k3s 전환(FINCH-39) 후 kubelet 이 대신 제공한다. AI 토큰(ai_responses · ai_token_daily 를 Postgres 데이터소스로 직접 조회).",
   "tags": [
     "finch",
     "overview"
@@ -364,6 +364,263 @@
         "sortOrder": "Descending",
         "enableLogDetails": true
       }
+    },
+    {
+      "type": "row",
+      "title": "AI — 토큰. 요금은 여기서 나간다",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "panels": [],
+      "id": 32
+    },
+    {
+      "type": "timeseries",
+      "title": "일별 생성 토큰 (기능별)",
+      "description": "캐시 히트는 뺀 실제 생성분. 입력+출력. 어느 기능이 먹는지 본다.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ai-db"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 37
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ai-db"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT date_trunc('day', created_at AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul' AS time, endpoint AS metric, sum(coalesce(input_tokens,0)+coalesce(output_tokens,0))::bigint AS value FROM ai_responses WHERE $__timeFilter(created_at) AND NOT cached GROUP BY 1,2 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "stacking": {
+              "mode": "normal"
+            },
+            "fillOpacity": 80
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 33
+    },
+    {
+      "type": "timeseries",
+      "title": "장부 정산 vs 응답 로그 (일별)",
+      "description": "장부(ai_token_daily)는 LLM 호출 직후 정산되고, 응답 로그는 응답을 만든 요청만 남는다. 두 선의 차이가 타임아웃 등으로 버려진 토큰이다. 벌어지면 장애다.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ai-db"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 37
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ai-db"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT (usage_date::timestamp AT TIME ZONE 'Asia/Seoul') AS time, '장부 정산' AS metric, sum(spent_tokens)::bigint AS value FROM ai_token_daily WHERE $__timeFilter(usage_date) GROUP BY 1 UNION ALL SELECT date_trunc('day', created_at AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul', '응답 로그', sum(coalesce(input_tokens,0)+coalesce(output_tokens,0))::bigint FROM ai_responses WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 34
+    },
+    {
+      "type": "stat",
+      "title": "캐시 히트율 (선택 기간)",
+      "description": "AI 요청 중 저장값을 돌려준 비율. 낮으면 캐시 키가 어긋나거나 재생성 루프다.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ai-db"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 45
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ai-db"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT 100.0*count(*) FILTER (WHERE cached)/nullif(count(*),0) AS value FROM ai_responses WHERE $__timeFilter(created_at)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 50
+              },
+              {
+                "color": "green",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "id": 35
+    },
+    {
+      "type": "stat",
+      "title": "비용 추정 (선택 기간, USD)",
+      "description": "gpt-5-nano 공시 단가 입력 $0.05 · 출력 $0.40 /1M 으로 환산. 모델을 바꾸면 이 SQL 의 상수를 고친다. 캐시 히트는 0 토큰이라 자연히 빠진다.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ai-db"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 45
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ai-db"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT sum(coalesce(input_tokens,0))*0.05/1e6 + sum(coalesce(output_tokens,0))*0.40/1e6 AS value FROM ai_responses WHERE $__timeFilter(created_at)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "id": 36
+    },
+    {
+      "type": "table",
+      "title": "기능별 호출 (선택 기간)",
+      "description": "생성은 LLM 을 실제로 부른 요청, 캐시는 저장값을 돌려준 요청. 한 기능의 생성이 사용자 수보다 훨씬 많으면 캐시가 빠지고 있는 것이다.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ai-db"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 45
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ai-db"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT endpoint AS \"기능\", count(*) FILTER (WHERE NOT cached) AS \"생성\", count(*) FILTER (WHERE cached) AS \"캐시\", count(DISTINCT user_id) AS \"사용자\", sum(output_tokens) FILTER (WHERE NOT cached)::bigint AS \"출력 토큰\" FROM ai_responses WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 5 DESC NULLS LAST"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "id": 37
     }
   ]
 }

@@ -164,11 +164,13 @@ chmod 644 /etc/cron.d/finch-cert-renew
 # 없어 포트폴리오 진단이 409 인데, 하루 한 번이면 그 창이 여섯 시간 반이다
 # (FINCH-214). 37종에 10초 안팎이라 매시로 돌려도 비용이 거의 없다.
 # 16:30 것은 장 마감 후 확정값을 받는 자리라 그대로 둔다.
+# 브리핑은 09:05 첫 시세 적재 뒤에 돈다. 시세가 오늘 행을 만들면 브리핑 기준
+# 거래일이 오늘로 바뀌어, 그 전에 만든 브리핑은 캐시 키가 어긋나 버려진다.
 echo "▶ AI 근거 데이터 적재 cron 등록"
 cat > /etc/cron.d/finch-ingest <<CRON
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 0 7 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh master >> /var/log/finch-ingest.log 2>&1
-30 7 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh briefing >> /var/log/finch-ingest.log 2>&1
+20 9 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh briefing >> /var/log/finch-ingest.log 2>&1
 5 9-16 * * 1-5 root ${APP_DIR}/infra/scripts/ingest-batch.sh market >> /var/log/finch-ingest.log 2>&1
 30 16 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh market >> /var/log/finch-ingest.log 2>&1
 40 18 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh docs >> /var/log/finch-ingest.log 2>&1
