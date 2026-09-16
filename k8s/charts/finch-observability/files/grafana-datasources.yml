@@ -34,3 +34,22 @@ datasources:
           matcherRegex: '[Xx]-[Rr]equest-[Ii]d[=:"\s]+([0-9a-fA-F-]{8,})'
           url: '$${__value.raw}'
           datasourceUid: loki
+
+  # AI 토큰 사용량. AI 가 요청마다 ai_responses 에, 정산마다 ai_token_daily 에
+  # 토큰을 남기므로 지표를 따로 내보내지 않고 그 테이블을 읽는다 — 재시작해도
+  # 카운터가 0 이 되지 않고, 청구와 대조할 숫자가 그대로 있다.
+  # 접속 정보는 grafana-ai-db Secret 에서 환경변수로 온다 (README "AI 토큰 대시보드").
+  # 계정은 두 테이블 SELECT 만 가진 읽기 전용 역할이다.
+  - name: AI DB
+    type: grafana-postgresql-datasource
+    uid: ai-db
+    access: proxy
+    url: postgres-ai.finch.svc.cluster.local:5432
+    user: $AI_DB_GRAFANA_USER
+    jsonData:
+      database: $AI_DB_GRAFANA_DATABASE
+      sslmode: disable
+      postgresVersion: 1700
+      timescaledb: false
+    secureJsonData:
+      password: $AI_DB_GRAFANA_PASSWORD

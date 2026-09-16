@@ -607,6 +607,31 @@ kubectl -n finch-observability create secret generic alert-webhook   --from-file
 
 **파일이 없으면 배치는 그대로 돌고 알림만 건너뛴다.** 알림 전송 실패가 배치 판정을 바꾸면 더 나쁘다 — 백업이 성공했는데 알림이 안 갔다는 이유로 실패로 기록되면, 실제 실패와 구별되지 않는다. Grafana 만 예외로 Secret 이 없으면 파드가 뜨지 않는다. 관측만 돌고 알림은 죽어 있는 상태를 조용히 지나가지 않게 한 것이다.
 
+### AI 토큰 대시보드
+
+개요 대시보드의 "AI — 토큰" 행은 AI DB 를 Grafana 가 직접 읽는다. AI 가 요청마다
+`ai_responses` 에, LLM 정산마다 `ai_token_daily` 에 토큰을 남기므로 지표를 따로
+내보내지 않는다 — 재시작해도 0 이 되지 않고 청구와 대조할 숫자가 그대로 있다.
+
+계정은 두 테이블만 읽는 역할로 만든다. AI DB 에서 한 번:
+
+```sql
+CREATE ROLE grafana_ro LOGIN PASSWORD '<비밀번호>';
+GRANT CONNECT ON DATABASE ai_invest TO grafana_ro;
+GRANT USAGE ON SCHEMA public TO grafana_ro;
+GRANT SELECT ON ai_responses, ai_token_daily TO grafana_ro;
+```
+
+그 값을 Secret 으로 넣는다. `alert-webhook` 과 같이 **없으면 Grafana 파드가 뜨지 않는다.**
+
+```
+kubectl -n finch-observability create secret generic grafana-ai-db \
+  --from-literal=user=grafana_ro --from-literal=password='<비밀번호>' --from-literal=database=ai_invest
+```
+
+비용 패널은 gpt-5-nano 공시 단가를 SQL 상수로 들고 있다. 모델을 바꾸면 대시보드
+JSON 의 그 상수를 같이 고친다.
+
 **같은 실패가 이어지는 동안에는 한 번만 보낸다.** `market` 은 장중 매시 도는데 원인이 그대로면 아홉 통이 온다. `/var/lib/finch/notify-state/<이름>` 에 마지막 상태를 두고 전이할 때만 보낸다. 실패한 뒤 처음 성공하면 `[복구]` 가 온다.
 
 이름별로 상태를 가른다. **이름이 한글이라 파일명을 그대로 쓸 수 없어 해시를 붙인다** — 안전한 문자만 남기면 한글이 전부 밑줄이 되어 `DB 백업` 과 `시세 적재` 가 같은 파일을 쓴다.

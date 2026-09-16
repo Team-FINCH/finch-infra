@@ -100,6 +100,22 @@ spec:
                 secretKeyRef:
                   name: alert-webhook
                   key: url
+            # AI DB 데이터소스(datasources.yml 의 "AI DB"). 읽기 전용 역할이다.
+            - name: AI_DB_GRAFANA_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-ai-db
+                  key: user
+            - name: AI_DB_GRAFANA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-ai-db
+                  key: password
+            - name: AI_DB_GRAFANA_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-ai-db
+                  key: database
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
             - name: GF_ANALYTICS_REPORTING_ENABLED
