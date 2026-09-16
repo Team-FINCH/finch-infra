@@ -172,7 +172,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 5 9-16 * * 1-5 root ${APP_DIR}/infra/scripts/ingest-batch.sh market >> /var/log/finch-ingest.log 2>&1
 30 16 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh market >> /var/log/finch-ingest.log 2>&1
 40 18 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh docs >> /var/log/finch-ingest.log 2>&1
-0 0,6,12,18 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh news >> /var/log/finch-ingest.log 2>&1
+0 6 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh news >> /var/log/finch-ingest.log 2>&1
 CRON
 chmod 644 /etc/cron.d/finch-ingest
 
