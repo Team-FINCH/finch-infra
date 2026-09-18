@@ -8,16 +8,17 @@
 | 항목 | 값 |
 |---|---|
 | 서버명 | finch |
-| 도메인 | `finchapp.org` |
+| 호스트명 | `finchapp.org` (지급) |
 | OS / 계정 | Ubuntu / `ubuntu` |
 | 접속 | `ssh -i finchT.pem ubuntu@finchapp.org` |
-| 서비스 URL | `https://finchapp.org/` (http 접근은 443 으로 301) |
+| 서비스 URL | **`https://finchapp.org/`** — 아래 참고. 옛 주소도 같은 서비스를 계속 받는다 |
 | Jenkins | `http://finchapp.org/jenkins/` (nginx 80 경유) |
 
 - `*.pem` 은 `.gitignore` 에 있다 — 절대 커밋하지 않는다. 팀원 간 공유는 별도 채널로. 키 유출 = 서버 무방비 노출.
 - 제공 기간: 프로젝트 종료 시까지 (종료 후 7일 이내 삭제). 웹 콘솔 없음, SSH 만 가능.
 - **ufw 는 반드시 enable 상태로 유지한다** (규정 — 지급 시 이미 enable + 22 만 허용 상태).
   `setup-server.sh` 가 22·80·443 만 허용하고 enable 한다. `sudo ufw status numbered` 로 확인.
+
   - 포트 추가: `sudo ufw allow <port>/tcp` (active 상태에서 즉시 반영). 절대 `ufw disable` 하지 않는다.
   - 포트 삭제: `sudo ufw status numbered` 로 번호 확인 → `sudo ufw delete <번호>` (하나씩) → **`sudo ufw enable` 다시 실행해야 적용**.
   - 방화벽 작업 전 ssh 터미널을 2~3개 열어 둔다. 22 가 막히면 복구 불가(초기화 요청만 가능).
@@ -31,6 +32,23 @@
   사본이 세 곳(로컬·서버·Credentials)이라 원본을 정해두지 않으면 조용히 갈라진다.
 - Jenkins 설치는 Jenkins 공식 문서 게시판의 "[CI/CD] Jenkins 설치 가이드" 도 참고 (우리는 Docker 로 띄운다 — 아래).
 - 이전에 쓰던 NCP VM(Rocky 8.8) 은 폐기 예정. `setup-server.sh` 는 두 OS 를 모두 지원하므로 필요 시 재사용 가능.
+
+### 주소가 둘이다
+
+`finchapp.org` 로 전환한 것은 2026-09-11(`1548cb0`, `e4527c6`)이다. 지급받은 호스트명이 없어진
+것이 아니라 **서비스 진입점이 하나 더 생긴 것**이고, 둘 다 살아 있다.
+
+| 주소 | 무엇을 받나 |
+|---|---|
+| `finchapp.org`, `www.finchapp.org` | 서비스. Cloudflare Tunnel 이 앞에 선다 |
+| `swagger.finchapp.org` | API 문서 (Basic 인증) |
+| `finchapp.org` | 서비스도 그대로 받는다. **SSH 와 Jenkins 는 이 주소로만 간다** |
+
+정본은 `infra/k8s/charts/finch/values.yaml` 의 `publicBaseUrl`, `frontBaseUrl`, `ingress.hosts` 다.
+
+**문서에 남은 옛 주소를 일괄 치환하면 안 된다.** 인증서 경로(`/etc/letsencrypt/live/finchapp.org/`)는
+certbot 이 만든 실제 디렉터리명이고, SSH 는 터널을 지나지 않으며, 날짜가 붙은 실측 기록은
+그때 실제로 부른 주소를 적어 둔 것이다.
 
 ## 구성
 
