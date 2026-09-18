@@ -1,18 +1,24 @@
-# infra/k8s — Kubernetes(k3s) 전환
+# infra/k8s — Kubernetes(k3s)
 
-운영을 k3s + Helm 으로 가는 것은 260819 회의록의 원래 설계다. 현재 EC2 가 Docker Compose 로
-도는 것은 EC2 를 늦게 받아 로컬용 구성을 그대로 올린 임시 상태다.
+**운영이 여기서 돈다.** 2026-09-11 에 80/443 을 Ingress 로 넘겨 커트오버를 마쳤다.
+Docker Compose 스택은 롤백 경로로 남아 있고, Jenkins 와 gitlab-runner 는 클러스터
+밖 compose 에 그대로 있다.
 
-전환은 스프린트 세 개에 걸친다. **커트오버 전까지 Compose 스택은 그대로 둔다.**
+k3s + Helm 은 260819 회의록의 원래 설계다. EC2 를 늦게 받아 로컬용 compose 구성을
+먼저 올렸고, 아래 여섯 티켓에 걸쳐 되돌렸다.
 
-| 티켓 | 범위 |
-|---|---|
-| FINCH-39 | k3s 설치와 노드 검증 (이 문서의 1번) |
-| FINCH-132 | Helm Chart 뼈대 |
-| FINCH-133 | Ingress Controller 와 인증서 이관 |
-| FINCH-134 | 관측 스택 이식 |
-| FINCH-135 | Jenkins 배포 스테이지를 helm 으로 교체 |
-| FINCH-136 | 커트오버와 롤백 — 80/443 인계 |
+| 티켓 | 범위 | |
+|---|---|---|
+| FINCH-39 | k3s 설치와 노드 검증 (이 문서의 1번) | 완료 |
+| FINCH-132 | Helm Chart 뼈대 | 완료 |
+| FINCH-133 | Ingress Controller 와 인증서 이관 | 완료 |
+| FINCH-134 | 관측 스택 이식 | 완료 |
+| FINCH-135 | Jenkins 배포 스테이지를 helm 으로 교체 | 완료 |
+| FINCH-136 | 커트오버와 롤백 — 80/443 인계 | **완료 (2026-09-11)** |
+
+**이 문서의 서술 중 일부는 전환 당시 시제로 남아 있다.** 「~할 것이다」 로 적힌 자리는
+전환 과정의 판단 근거를 담은 기록이므로 그대로 둔다 — 왜 그렇게 골랐는지가 본체다.
+지금 상태를 알고 싶으면 `infra/README.md` 의 `## 배포` 와 `## k8s 배포` 절을 본다.
 
 ## 런타임은 Docker 다 (cri-dockerd)
 
