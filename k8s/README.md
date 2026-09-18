@@ -286,15 +286,15 @@ kubelet 이 `/metrics/cadvisor` 로 같은 지표를 내장 노출하고, 컨테
 - [x] **`imagePullPolicy: IfNotPresent`** — 태그가 `latest` 면 k8s 기본값이 `Always` 라,
       로컬에 이미지가 있어도 레지스트리를 찾다가 `ErrImagePull` 로 죽는다. `--docker` 를 써도
       이 함정은 남는다. backend, ai, frontend 세 템플릿에 모두 명시돼 있다 (확인함).
-- [ ] **frontend 이미지의 nginx.conf 조정 필요** — 현재 conf 는 Docker 내장 DNS(127.0.0.11)
+- [x] **frontend 이미지의 nginx.conf 조정 필요** — 현재 conf 는 Docker 내장 DNS(127.0.0.11)
       resolver 로 backend/jenkins 를 프록시한다. k8s 에서는 라우팅을 ingress-nginx 가 맡으므로
       frontend 는 **정적 서빙 전용 conf** 로 바꾼다 (차트의 Ingress 가 /api 라우팅을 대체).
-- [ ] backend 접속 계약은 이미 k8s 전제다 — `application.yaml` 이 Service 이름
+- [x] backend 접속 계약은 이미 k8s 전제다 — `application.yaml` 이 Service 이름
       `postgres`, `redis` 를 호스트로 쓰고 `postgres-secret` 주입을 가정한다. 매니페스트가 이 이름을 따른다.
-- [ ] Jenkinsfile 배포 스테이지를 `compose up` → `helm upgrade --install` 로 교체.
-- [ ] 이미지 태그를 latest → 커밋 해시로 전환 (차트 values 의 tag 를 `--set` 으로 주입).
+- [x] Jenkinsfile 배포 스테이지를 `compose up` → `helm upgrade --install` 로 교체 (`Jenkinsfile:193`).
+- [x] 이미지 태그를 latest → 커밋 해시로 전환 (차트 values 의 tag 를 `--set` 으로 주입, `Jenkinsfile:187`).
 - [ ] 시세 워커가 생기면 앱 차트에 Deployment 추가 (별도 프로세스 결정 — 인프라 QnA §7).
-- [ ] 관측 스택은 공식 Helm 차트로 별도 릴리스 (앱 차트에 넣지 않는다 — 앱 롤백과 생명주기 분리):
+- [x] 관측 스택은 공식 Helm 차트로 별도 릴리스 (앱 차트에 넣지 않는다 — 앱 롤백과 생명주기 분리):
       Prometheus, Grafana, **Loki + Alloy(DaemonSet)**. 로그는 각 서비스 stdout → CRI 로그 파일
       (`/var/log/pods/...`) → Alloy 수집이라 앱 코드 수정 없음. 로테이션은 kubelet 기본값(10Mi×5)이
       compose 설정을 승계. Loki retention 기간은 팀 결정 대기. 도입 시점(compose 먼저 vs 전환과 함께) 미정.
