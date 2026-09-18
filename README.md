@@ -203,18 +203,32 @@ credentials 는 기동 시점에 복호화 오류가 없다는 것까지 확인�
 
 ## 배포 (루트 `Jenkinsfile` 이 수행)
 
+> **2026-09-11 커트오버 이후 배포 대상은 k3s 다.** 아래가 지금 도는 흐름이고,
+> compose 로 배포하던 옛 절차는 롤백 경로로만 남는다.
+
 master 머지 webhook → Jenkins 가 자기 워크스페이스에서:
 
 1. 직전 성공 빌드와 `git diff` 로 변경 파트 감지 (backend / ai / nginx)
-2. Credentials(`finch-env`, `finch-ai-env`)를 `infra/.env`·`infra/ai.env` 로 주입
-3. `docker compose build <변경 서비스>` → `up -d <변경 서비스>` (수 초 다운타임)
-4. 종료 시 워크스페이스의 비밀값 파일 삭제
+2. Credentials(`finch-env`, `finch-ai-env`)를 `infra/.env`, `infra/ai.env` 로 주입
+3. `docker compose build <변경 서비스>` 로 **이미지만** 만든다
+4. `helm upgrade --install finch infra/k8s/charts/finch -n finch --atomic` (`Jenkinsfile:193`)
+5. 종료 시 워크스페이스의 비밀값 파일 삭제
 
-compose 프로젝트 이름을 `finch` 로 고정했으므로, 수동 기동(위 3번)과 Jenkins 배포가
-서로 다른 디렉터리에서 실행돼도 같은 컨테이너·볼륨을 관리한다.
+**이미지 태그가 `latest` 가 아니다.** 파트별로 `git log -1 --format=%h -- <그 파트 경로>` 로
+**그 파트를 마지막으로 건드린 커밋 해시**를 뽑아 `--set <파트>.image.tag=<해시>` 로 넘긴다.
+태그가 그대로면 helm 이 차이를 못 찾아 파드를 건드리지 않기 때문이다.
+
+`--atomic` 이라 롤아웃이 실패하면 직전 리비전으로 자동 롤백된다. `--timeout 5m` 이므로
+빌드와 롤아웃이 그보다 길어지면 성공한 배포도 되돌아간다.
+
+**변경 감지 범위에 주의한다.** `infra/nginx/` 를 건드리면 nginx(프론트) 이미지가 통째로
+다시 빌드돼 그 시점 master 의 `frontend/` 전부가 함께 나간다 (`Jenkinsfile:45~72`).
+설정 한 줄만 고칠 때도 프론트에 미배포 변경이 쌓여 있는지 먼저 본다.
 
 Jenkins job 설정(최초 1회)과 Credentials 목록은 `Jenkinsfile` 상단 주석 참고.
 수동 전체 배포가 필요하면 job 의 `FORCE_ALL` 파라미터를 켜고 실행한다.
+
+**k3s 쪽 상세는 아래 `## k8s 배포` 절과 `infra/k8s/README.md` 에 있다.**
 
 ## healthcheck
 
@@ -781,12 +795,21 @@ docker ps --filter name=finch-nginx --format '{{.Status}}'
 
 **되돌린 뒤에 할 일.** 무엇 때문에 되돌렸는지 적고, 대조 스크립트를 다시 돌려 그 항목이 잡히는지 본다. 잡히지 않으면 대조 목록에 그 항목을 추가한다.
 
-## 남은 작업 (초안 상태)
+## 구축 이력
 
-- [ ] `docker/backend.Dockerfile` — backend 파트가 `build.gradle`·`gradlew` 커밋 후 동작. Java 버전 확인
-- [ ] nginx `/api` 프리픽스 전달 방식 — backend 컨트롤러 매핑이 정해지면 확정
-- [ ] 루트 `.gitlab-ci.yml` 에 `include: - local: ai/.gitlab-ci.yml` 추가 (팀 결정, ADR-0002)
-- [ ] Jenkins job 생성: Pipeline from SCM + GitLab webhook 연결 + Credentials 2건 등록 (FINCH-115)
+- [x] `docker/backend.Dockerfile` — 배포에 쓰이고 있다
+- [x] nginx `/api` 프리픽스 전달 — 프리픽스를 벗기지 않고 그대로 넘긴다 (`nginx.conf` 의 `location /api/`)
+- [x] 루트 `.gitlab-ci.yml` 에 파트별 include (`.gitlab-ci.yml:25~29`, 네 파트 전부)
+- [x] Jenkins job 생성: Pipeline from SCM + GitLab webhook + Credentials (FINCH-115)
 - [x] HTTPS 적용: 443 종단, 80 → 443 리다이렉트, webroot 갱신 cron (2026-09-01, FINCH-114)
 - [x] 관측 스택: Prometheus, Grafana, Loki, Alloy 와 기본 대시보드 (2026-09-01, FINCH-52, -116)
-- [x] EC2 전환: `setup-server.sh` Ubuntu/ufw 대응, 접속 정보·이전 절차 문서화 (2026-08-31)
+- [x] EC2 전환: `setup-server.sh` Ubuntu/ufw 대응, 접속 정보와 이전 절차 문서화 (2026-08-31)
+- [x] k3s 커트오버: 80/443 을 Ingress 로 넘기고 Helm 으로 배포 (2026-09-11, FINCH-136)
+
+### 아직 안 한 것
+
+- [ ] **배치 실패 알림이 꺼져 있다.** `notify-lib.sh` 는 서버에 있는데
+      `/etc/finch/notify-webhook`(600 root)이 없어 알림이 조용히 건너뛰어진다.
+      파일 하나를 놓으면 산다 (`FINCH-216`)
+- [ ] 부하 측정 2차와 컨테이너 자원 상한 실측 (`FINCH-58`, `-59`, `-62`)
+- [ ] 시세 워커가 생기면 앱 차트에 Deployment 추가
