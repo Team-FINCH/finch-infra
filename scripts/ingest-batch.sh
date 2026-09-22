@@ -54,6 +54,7 @@ PRICE_DAYS=${PRICE_DAYS:-7}
 # 위험 지표 요건인 60거래일의 네 배 이상이다.
 BACKFILL_DAYS=${BACKFILL_DAYS:-400}
 DART_DAYS=${DART_DAYS:-7}
+DART_BACKFILL_DAYS=${DART_BACKFILL_DAYS:-365}
 # 공시 이벤트 표(events)는 목록 API 만 써서 비용이 없다. 원문보다 넓게 30일을 본다 —
 # 브리핑·성과 요인·다가오는 일정이 이 표를 읽는데, 지금까지 배치에 없어 항상 비어 있었다 (#98).
 EVENT_DAYS=${EVENT_DAYS:-30}
@@ -143,7 +144,9 @@ step_market() {
 step_docs() {
     local t
     t=$(resolve_tickers)
-    run_ai app.rag.dart --tickers "$t" --days "$DART_DAYS"
+    # 공시가 한 건도 없는 종목(새로 산 종목)만 1년을 거슬러 받는다. 시세의 400일
+    # 백필과 같은 구조다 — 증분 7일만 주면 3월 사업보고서가 영영 안 들어온다 (#98).
+    run_ai app.rag.dart --tickers "$t" --days "$DART_DAYS" --backfill-days "$DART_BACKFILL_DAYS"
     run_ai ingest.events --tickers "$t" --days "$EVENT_DAYS"
     run_ai app.rag.search --backfill
 }
