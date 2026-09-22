@@ -175,6 +175,9 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 30 16 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh market >> /var/log/finch-ingest.log 2>&1
 40 18 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh docs >> /var/log/finch-ingest.log 2>&1
 0 6 * * * root ${APP_DIR}/infra/scripts/ingest-batch.sh news >> /var/log/finch-ingest.log 2>&1
+# 06:00 은 전날 저녁 기사까지다. 오전 장중 기사가 다음 날 아침에야 들어오는 것을 막으려
+# 평일 13:00 에 한 번 더 받는다 (#98). URL 유니크 제약이 중복을 거르므로 신규만 쌓인다.
+0 13 * * 1-5 root ${APP_DIR}/infra/scripts/ingest-batch.sh news >> /var/log/finch-ingest.log 2>&1
 CRON
 chmod 644 /etc/cron.d/finch-ingest
 
