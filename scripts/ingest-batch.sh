@@ -54,6 +54,9 @@ PRICE_DAYS=${PRICE_DAYS:-7}
 # 위험 지표 요건인 60거래일의 네 배 이상이다.
 BACKFILL_DAYS=${BACKFILL_DAYS:-400}
 DART_DAYS=${DART_DAYS:-7}
+# 공시 이벤트 표(events)는 목록 API 만 써서 비용이 없다. 원문보다 넓게 30일을 본다 —
+# 브리핑·성과 요인·다가오는 일정이 이 표를 읽는데, 지금까지 배치에 없어 항상 비어 있었다 (#98).
+EVENT_DAYS=${EVENT_DAYS:-30}
 NEWS_DAYS=${NEWS_DAYS:-2}
 # 검색 API 응답 상한. 기존 URL은 DB unique 제약으로 재사용되고 신규 기사만
 # 청크·임베딩 대상이므로, 호출 주기마다 같은 기사를 받아도 중복 비용이 들지 않는다.
@@ -141,6 +144,7 @@ step_docs() {
     local t
     t=$(resolve_tickers)
     run_ai app.rag.dart --tickers "$t" --days "$DART_DAYS"
+    run_ai ingest.events --tickers "$t" --days "$EVENT_DAYS"
     run_ai app.rag.search --backfill
 }
 

@@ -549,6 +549,8 @@ Jenkinsfile                '운영 스크립트 동기화' 스테이지 (when �
 
 적재는 `ingest-batch.sh <단계>` 이고 단계는 `master`, `market`, `docs`, `news`, `briefing`, `all` 이다. 전역 잠금(`flock`)이 있어 시각이 겹쳐도 뒤엣것이 기다린다. 실행 시 `deploy/ai` 존재 여부로 k3s를 우선 감지하고, 없으면 compose를 사용한다. 장애 복구처럼 런타임을 고정해야 할 때는 `OPS_RUNTIME=k3s|compose`를 명시한다.
 
+`docs` 단계는 공시 원문(`app.rag.dart`, 7일)과 공시 이벤트 표(`ingest.events`, 30일)를 같은 종목 목록으로 적재한다. 이벤트 표는 목록 API 만 써 비용이 없고, 브리핑·성과 요인·다가오는 일정이 읽는다.
+
 `news` 단계는 DB에 남은 과거 종목을 합치지 않고 `Settings.service_tickers`의 확정
 30종목만 수집한다. 기본값은 최근 2일·종목당 최대 20건이며 `NEWS_DAYS`와
 `NEWS_MAX_DOCS`로 조정한다. URL 해시 unique 제약으로 중복 기사는 다시 저장하지 않고,
