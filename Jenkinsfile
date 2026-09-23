@@ -277,7 +277,7 @@ def notifyDeploy(String state, String detail) {
     if (env.NOTIFY_KIND == 'discord') {
         payload = '{"content":"' + jsonEscape(title + "\n" + body) + '"}'
     } else {
-        payload = '{"username":"Finch 배포","icon_emoji":":rocket:","attachments":[{' +
+        payload = '{"username":"FINCH 배포","icon_emoji":":rocket:","attachments":[{' +
                   '"color":"' + (firing ? '#D63232' : '#36A64F') + '",' +
                   '"title":"' + jsonEscape(title) + '",' +
                   '"fallback":"' + jsonEscape(title) + '",' +

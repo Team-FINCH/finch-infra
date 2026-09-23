@@ -15,7 +15,7 @@
 
 NOTIFY_WEBHOOK_FILE="${NOTIFY_WEBHOOK_FILE:-/etc/finch/notify-webhook}"
 NOTIFY_STATE_DIR="${NOTIFY_STATE_DIR:-/var/lib/finch/notify-state}"
-NOTIFY_USERNAME="${NOTIFY_USERNAME:-Finch 배치}"
+NOTIFY_USERNAME="${NOTIFY_USERNAME:-FINCH 배치}"
 NOTIFY_ICON="${NOTIFY_ICON:-:gear:}"
 
 _notify_json_escape() {

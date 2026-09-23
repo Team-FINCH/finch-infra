@@ -1,7 +1,7 @@
 {
   "uid": "finch-overview",
   "title": "FINCH 서비스 개요",
-  "description": "단일 EC2 에 올린 Finch 스택 상태. 호스트 자원(node-exporter) · 백엔드 애플리케이션 지표(micrometer) · 전체 컨테이너 로그(Loki). 컨테이너별 자원 지표는 이 서버의 Docker 스토리지 드라이버(overlayfs) 때문에 cAdvisor 가 동작하지 않아 빠져 있다 — k3s 전환(FINCH-39) 후 kubelet 이 대신 제공한다. AI 토큰(ai_responses · ai_token_daily 를 Postgres 데이터소스로 직접 조회).",
+  "description": "단일 EC2 에 올린 FINCH 스택 상태. 호스트 자원(node-exporter) · 백엔드 애플리케이션 지표(micrometer) · 전체 컨테이너 로그(Loki). 컨테이너별 자원 지표는 이 서버의 Docker 스토리지 드라이버(overlayfs) 때문에 cAdvisor 가 동작하지 않아 빠져 있다 — k3s 전환(FINCH-39) 후 kubelet 이 대신 제공한다. AI 토큰(ai_responses · ai_token_daily 를 Postgres 데이터소스로 직접 조회).",
   "tags": [
     "finch",
     "overview"

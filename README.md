@@ -614,9 +614,9 @@ k8s       kubectl -n finch exec deploy/ai --
 
 | 보내는 것 | 발신자 | 언제 |
 | :--- | :--- | :--- |
-| 관측 경보 (AI 헬스, 적재 상태) | `Finch 관측` | Grafana 알림 규칙 (FINCH-187) |
-| 배포 실패와 복구 | `Finch 배포` | Jenkins `notifyDeploy` |
-| 크론 배치 실패와 복구 | `Finch 배치` | `notify-lib.sh` (FINCH-216) |
+| 관측 경보 (AI 헬스, 적재 상태) | `FINCH 관측` | Grafana 알림 규칙 (FINCH-187) |
+| 배포 실패와 복구 | `FINCH 배포` | Jenkins `notifyDeploy` |
+| 크론 배치 실패와 복구 | `FINCH 배치` | `notify-lib.sh` (FINCH-216) |
 
 본문은 다섯 줄로 고정이다.
 

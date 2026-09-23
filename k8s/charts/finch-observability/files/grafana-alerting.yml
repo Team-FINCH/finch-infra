@@ -27,7 +27,7 @@ contactPoints:
           url: ${ALERT_WEBHOOK_URL}
           # 채널에서 누가 보낸 것인지 한눈에 보이게 한다. 배포 알림
           # (Jenkinsfile 의 notifyDeploy)과 같은 웹훅을 쓰므로 이름으로 가른다.
-          username: Finch 관측
+          username: FINCH 관측
           icon_emoji: ":bar_chart:"
           # 제목은 알림 이름, 본문은 아래 템플릿이 만든다.
           title: '{{ template "finch.title" . }}'
