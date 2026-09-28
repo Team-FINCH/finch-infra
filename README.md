@@ -663,7 +663,7 @@ kubectl -n finch-observability create secret generic grafana-ai-db \
   --from-literal=user=grafana_ro --from-literal=password='<비밀번호>' --from-literal=database=ai_invest
 ```
 
-비용 패널은 gpt-5-nano 공시 단가를 SQL 상수로 들고 있다. 모델을 바꾸면 대시보드
+비용 패널은 gpt-6-luna 공시 단가를 SQL 상수로 들고 있다. 모델을 바꾸면 대시보드
 JSON 의 그 상수를 같이 고친다.
 
 **같은 실패가 이어지는 동안에는 한 번만 보낸다.** `market` 은 장중 매시 도는데 원인이 그대로면 아홉 통이 온다. `/var/lib/finch/notify-state/<이름>` 에 마지막 상태를 두고 전이할 때만 보낸다. 실패한 뒤 처음 성공하면 `[복구]` 가 온다.
