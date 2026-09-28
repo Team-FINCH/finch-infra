@@ -65,7 +65,7 @@ spec:
             # 운영 LLM 모델 (GitLab #63). compose 쪽과 같은 값을 여기에도 둔다 —
             # 없으면 커트오버 직후 코드 기본값(mini)으로 조용히 되돌아간다.
             - name: LLM_MODEL
-              value: gpt-5-nano
+              value: gpt-6-luna
           resources:
             {{- toYaml .Values.ai.resources | nindent 12 }}
           readinessProbe:
