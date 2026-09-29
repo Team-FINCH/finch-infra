@@ -12,14 +12,40 @@
 
 ## 구성
 
-```
- 사용자 ─► Cloudflare Tunnel ─► k3s Ingress (nginx)
-                                  ├─ frontend
-                                  ├─ backend ── PostgreSQL · Redis
-                                  └─ ai ─────── PostgreSQL + pgvector
+```mermaid
+flowchart TB
+    U(["사용자"]) -->|HTTPS| CF["Cloudflare<br/>DNS · TLS · Tunnel"]
+    CF --> ING
 
- Jenkins ── master 머지 감지 → 변경 파트만 빌드 → helm upgrade --atomic
- 관측 ───── Prometheus · Grafana · Loki · Alloy
+    subgraph K3S["k3s 단일 노드"]
+        ING["ingress-nginx"]
+        subgraph APP["Helm 릴리스: finch"]
+            FE["frontend"]
+            BE["backend"]
+            AI["ai"]
+        end
+        subgraph DATA["StatefulSet"]
+            PGB[("postgres-backend")]
+            PGA[("postgres-ai<br/>pgvector")]
+            RD[("redis")]
+        end
+        subgraph OBS["Helm 릴리스: finch-observability"]
+            PROM["Prometheus"] --> GRAF["Grafana"]
+            ALLOY["Alloy"] --> LOKI["Loki"] --> GRAF
+            EXP["node-exporter · kube-state-metrics<br/>json-exporter"] --> PROM
+        end
+        ING --> FE
+        ING --> BE
+        BE --> AI
+        BE --> PGB
+        BE --> RD
+        AI --> PGA
+    end
+
+    GIT["GitHub master"] -->|webhook| JK["Jenkins"]
+    JK -->|"① 변경 파트 감지<br/>② 비밀값 주입<br/>③ 바뀐 이미지만 빌드"| IMG["컨테이너 이미지"]
+    IMG -->|"④ helm upgrade --atomic<br/>실패 시 자동 롤백"| APP
+    CRON["cron 배치<br/>시세 · 뉴스 · 공시 · 브리핑"] --> AI
 ```
 
 ## 이렇게 운영했습니다
