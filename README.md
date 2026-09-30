@@ -45,10 +45,6 @@
 ![AWS EC2](https://img.shields.io/badge/AWS_EC2-FF9900?style=flat-square&logo=amazonec2&logoColor=white)
 ![Shell](https://img.shields.io/badge/Shell-4EAA25?style=flat-square&logo=gnubash&logoColor=white)
 
-<details>
-<summary><b>📋 분류별로 보기</b></summary>
-<br />
-
 | 분류 | 사용 기술 |
 | ---- | --------- |
 | 오케스트레이션 | k3s (단일 노드) |
@@ -62,56 +58,14 @@
 | 서버 | AWS EC2 |
 | 자동화 | Shell, Python (환경변수 계약 검사) |
 
-</details>
+## 🧭 아키텍처
 
-<details>
-<summary><b>🧭 아키텍처</b></summary>
-<br />
-
-```mermaid
-flowchart TB
-    U(["사용자"]) -->|HTTPS| CF["Cloudflare<br/>DNS, TLS, Tunnel"]
-    CF --> ING
-
-    subgraph K3S["k3s 단일 노드"]
-        ING["ingress-nginx<br/>유일한 외부 진입점"]
-        subgraph APP["Helm 릴리스: finch"]
-            FE["frontend"]
-            BE["backend"]
-            AI["ai<br/>외부 비노출"]
-        end
-        subgraph DATA["StatefulSet"]
-            PGB[("postgres-backend<br/>원장")]
-            PGA[("postgres-ai<br/>pgvector")]
-            RD[("redis<br/>시세 캐시")]
-        end
-        subgraph OBS["Helm 릴리스: finch-observability"]
-            PROM["Prometheus"] --> GRAF["Grafana"]
-            ALLOY["Alloy"] --> LOKI["Loki"] --> GRAF
-            EXP["node-exporter<br/>kube-state-metrics<br/>json-exporter"] --> PROM
-        end
-        ING --> FE
-        ING --> BE
-        BE -->|내부 토큰| AI
-        BE --> PGB
-        BE --> RD
-        AI --> PGA
-    end
-
-    GIT["GitHub master"] -->|webhook| JK["Jenkins"]
-    JK -->|"① 변경 파트 감지<br/>② 비밀값 주입<br/>③ 바뀐 이미지만 빌드"| IMG["컨테이너 이미지"]
-    IMG -->|"④ helm upgrade --atomic<br/>실패 시 자동 롤백"| APP
-    CRON["cron 배치<br/>시세, 뉴스, 공시, 브리핑"] --> AI
-```
+<img src="docs/images/architecture.png" alt="FINCH 인프라 아키텍처" />
 
 **앱과 관측 스택을 별도 Helm 릴리스로 분리했습니다.** 관측을 다시 배포해도 앱이 내려가지 않고, 그 반대도 같습니다.
 Docker Compose 구성은 지우지 않고 롤백 경로로 남겨 뒀습니다.
 
-</details>
-
-<details>
-<summary><b>📂 구조</b></summary>
-<br />
+## 📂 구조
 
 ```
 k8s/
@@ -139,8 +93,6 @@ docker-compose*.yml                이전 구성. 롤백 경로로 유지
 | `cutover-diff.sh` | 이전 전후 구성 대조 |
 | `ingest-batch.sh` | 시세, 뉴스, 공시 수집 배치 |
 | `renew-cert.sh` | 인증서 갱신 |
-
-</details>
 
 서버 구축, 배포, 백업, 장애 대응 절차는 [OPERATIONS.md](OPERATIONS.md) 에 있습니다.
 
